@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>專業記帳 APP</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <header class="app-header">
+    <div class="header-left"><select id="globalLedgerSelect"><option value="日常帳本">日常帳本</option></select></div>
+    <div class="header-title" id="headerTitle">日概況</div>
+    <div class="header-right"></div>
+  </header>
+
+  <main class="app-main">
+    <div id="page-home" class="page active">
+      <div class="calendar-section">
+        <div class="calendar-header"><button id="prevMonth">◀</button><span id="currentMonthYear"></span><button id="nextMonth">▶</button></div>
+        <div class="calendar-grid" id="calendarGrid"></div>
+      </div>
+      <div class="list-section">
+        <h3 class="section-title" id="dailyDetailTitle">本日明細</h3>
+        <div id="expenseList" class="expense-list"><div class="empty-state">載入中...</div></div>
+      </div>
+      <button class="fab-btn" id="fabAddBtn">+</button>
+    </div>
+
+    <div id="page-charts" class="page" style="background:#f0f2f5; padding:0; min-height:100vh;">
+      <div class="chart-header-area">
+        <div class="chart-filter-row">
+          <select id="chartInOutSelect"><option value="支出">支出</option><option value="收入">收入</option><option value="總收支">總收支</option></select>
+          <select id="chartTimeSelect"><option value="本月">本月</option><option value="當年">當年</option><option value="歷年">歷年</option></select>
+          <select id="chartYearSelect"></select>
+          <select id="chartMonthSelect"></select>
+          <select id="chartUserSelect"><option value="全使用者">全使用者</option></select>
+        </div>
+        <div class="chart-summary-box"><span id="chartSummaryText">總支出: $0</span></div>
+      </div>
+      <div class="custom-bars-container" id="customChartBars"></div>
+    </div>
+
+    <div id="page-manage" class="page">
+      <div class="manage-tabs">
+        <div class="tab-item active" data-target="manage-content-ledgers">帳本</div>
+        <div class="tab-item" data-target="manage-content-users">使用者</div>
+        <div class="tab-item" data-target="manage-content-categories">分類</div>
+      </div>
+      <div class="manage-content-container">
+        <div id="manage-content-ledgers" class="manage-content active">
+          <div class="section-header"><span>帳本列表</span><button class="add-item-btn-small" onclick="openManageModal('add', '帳本')">+</button></div>
+          <ul id="ledgerList" class="manage-list-v2"></ul>
+        </div>
+        <div id="manage-content-users" class="manage-content">
+          <div class="section-header"><span>使用者列表</span><button class="add-item-btn-small" onclick="openManageModal('add', '使用者')">+</button></div>
+          <ul id="userList" class="manage-list-v2"></ul>
+        </div>
+        <div id="manage-content-categories" class="manage-content">
+          <div class="section-header"><span>大分類 (內含小分類)</span><button class="add-item-btn-small" onclick="openManageModal('add', '大分類')">+</button></div>
+          <ul id="categoryList" class="manage-list-v2"></ul>
+        </div>
+      </div>
+    </div>
+
+    <div id="page-exceptions" class="page">
+      <div class="list-section">
+        <h3 class="section-title" style="color:#ef5350;">缺少資料 / 異常明細</h3>
+        <p style="font-size:12px; color:#666; margin-top:-5px; margin-bottom:15px;">以下明細關聯已被刪除，請重新編輯或刪除。</p>
+        <div id="exceptionList" class="expense-list"><div class="empty-state">載入中...</div></div>
+      </div>
+    </div>
+
+    <div id="page-chart-detail" class="page">
+      <div style="display: flex; align-items: center; margin-bottom: 15px;">
+        <button id="backToChartBtn" class="icon-btn-gray" style="font-size: 16px; margin-right: 10px; background: #e0e0e0; padding: 6px 12px; border-radius: 20px;">◀ 返回統計</button>
+        <h3 id="pageChartDetailTitle" style="margin: 0; color: var(--primary);">分類明細</h3>
+      </div>
+      <div class="list-section"><div id="pageChartDetailList" class="expense-list"></div></div>
+    </div>
+  </main>
+
+  <nav class="bottom-nav">
+    <div class="nav-item active" data-target="page-home"><div class="icon">📅</div><span>日概況</span></div>
+    <div class="nav-item emphasize" data-target="page-manage"><div class="icon-container"><div class="icon">⚙️</div></div><span>管理</span></div>
+    <div class="nav-item" data-target="page-charts"><div class="icon">📈</div><span>統計</span></div>
+    <div class="nav-item" data-target="page-exceptions"><div class="icon">⚠️</div><span>異常</span></div>
+  </nav>
+
+  <div id="addModal" class="modal">
+    <div class="modal-content">
+      <span class="close-btn" id="closeModalBtn">&times;</span>
+      <h2 style="margin-top:0;">新增記帳</h2>
+      <form id="expenseForm">
+        <input type="hidden" id="expenseId" name="id">
+        <input type="hidden" id="expenseOperation" name="operation" value="add">
+        <input type="hidden" id="formLedger" name="ledgerName">
+        
+        <div class="form-group"><label>日期</label><input type="date" id="date" name="date" required></div>
+        <div class="form-group row">
+          <div class="col"><label>收支</label><select name="type"><option value="expense">支出</option><option value="income">收入</option></select></div>
+          <div class="col"><label>金額</label><input type="number" name="amount" required></div>
+        </div>
+        <div class="form-group"><label>使用者 <span class="quick-add" onclick="quickAdd('使用者')">➕新增</span></label><select id="user" name="user" required></select></div>
+        <div class="form-group row">
+          <div class="col"><label>大項目 <span class="quick-add" onclick="quickAdd('大分類')">➕新增</span></label><select id="mainCategory" name="mainCategory" required></select></div>
+          <div class="col"><label>小項目 <span class="quick-add" onclick="quickAdd('小分類')">➕新增</span></label><select id="subCategory" name="subCategory" required></select></div>
+        </div>
+        <div class="form-group"><label>備註</label><input type="text" name="content"></div>
+        <button type="submit" class="submit-btn" id="submitBtn">儲存</button>
+      </form>
+    </div>
+  </div>
+
+  <div id="manageItemModal" class="modal">
+    <div class="modal-content">
+      <span class="close-btn" onclick="document.getElementById('manageItemModal').style.display='none'">&times;</span>
+      <h2 style="margin-top:0;" id="manageModalTitle">新增項目</h2>
+      <form id="manageItemForm">
+        <input type="hidden" id="manageOperation"> <input type="hidden" id="manageType"> <input type="hidden" id="manageId"> 
+        <div class="form-group" id="manageParentCatGroup" style="display:none;"><label>所屬大分類</label><select id="manageParentCatInput"></select></div>
+        <div class="form-group"><label id="manageInputLabel">名稱</label><input type="text" id="manageNameInput" required></div>
+        
+        <div class="form-group" id="manageIconGroup" style="display:none;">
+          <label>圖示 (請輸入一個 Emoji)</label>
+          <input type="text" id="manageIconInput" maxlength="2" placeholder="例如: 🍔">
+        </div>
+        
+        <div class="form-group" id="manageColorGroup" style="display:none;">
+          <label>代表顏色</label>
+          <input type="color" id="manageColorInput" style="height:40px; padding:2px; cursor:pointer;">
+        </div>
+
+        <button type="submit" class="submit-btn" id="manageSubmitBtn">儲存</button>
+      </form>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
