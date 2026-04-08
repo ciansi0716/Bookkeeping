@@ -9,34 +9,55 @@
 <body>
 
   <header class="app-header">
-    <div class="header-left"><select id="globalLedgerSelect"><option value="日常帳本">日常帳本</option></select></div>
+    <div class="header-left">
+      <select id="globalLedgerSelect"><option value="日常帳本">日常帳本</option></select>
+    </div>
     <div class="header-title" id="headerTitle">日概況</div>
     <div class="header-right"></div>
   </header>
 
   <main class="app-main">
+    
     <div id="page-home" class="page active">
       <div class="calendar-section">
-        <div class="calendar-header"><button id="prevMonth">◀</button><span id="currentMonthYear"></span><button id="nextMonth">▶</button></div>
+        <div class="calendar-header">
+          <button id="prevMonth">◀</button>
+          <span id="currentMonthYear"></span>
+          <button id="nextMonth">▶</button>
+        </div>
         <div class="calendar-grid" id="calendarGrid"></div>
       </div>
       <div class="list-section">
-        <h3 class="section-title" id="dailyDetailTitle">本日明細</h3>
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 10px;">
+          <h3 class="section-title" id="dailyDetailTitle" style="border: none; padding: 0; margin: 0;">本日明細</h3>
+          <button class="add-item-btn-small" id="fabAddBtn">+</button>
+        </div>
         <div id="expenseList" class="expense-list"><div class="empty-state">載入中...</div></div>
       </div>
-      <button class="fab-btn" id="fabAddBtn">+</button>
     </div>
 
     <div id="page-charts" class="page" style="background:#f0f2f5; padding:0; min-height:100vh;">
       <div class="chart-header-area">
         <div class="chart-filter-row">
-          <select id="chartInOutSelect"><option value="支出">支出</option><option value="收入">收入</option><option value="總收支">總收支</option></select>
-          <select id="chartTimeSelect"><option value="本月">本月</option><option value="當年">當年</option><option value="歷年">歷年</option></select>
+          <select id="chartInOutSelect">
+            <option value="支出">支出</option>
+            <option value="收入">收入</option>
+            <option value="總收支">總收支</option>
+          </select>
+          <select id="chartTimeSelect">
+            <option value="本月">本月</option>
+            <option value="當年">當年</option>
+            <option value="歷年">歷年</option>
+          </select>
           <select id="chartYearSelect"></select>
           <select id="chartMonthSelect"></select>
-          <select id="chartUserSelect"><option value="全使用者">全使用者</option></select>
+          <select id="chartUserSelect">
+            <option value="全使用者">全使用者</option>
+          </select>
         </div>
-        <div class="chart-summary-box"><span id="chartSummaryText">總支出: $0</span></div>
+        <div class="chart-summary-box">
+          <span id="chartSummaryText">總支出: $0</span>
+        </div>
       </div>
       <div class="custom-bars-container" id="customChartBars"></div>
     </div>
@@ -47,6 +68,7 @@
         <div class="tab-item" data-target="manage-content-users">使用者</div>
         <div class="tab-item" data-target="manage-content-categories">分類</div>
       </div>
+
       <div class="manage-content-container">
         <div id="manage-content-ledgers" class="manage-content active">
           <div class="section-header"><span>帳本列表</span><button class="add-item-btn-small" onclick="openManageModal('add', '帳本')">+</button></div>
@@ -66,8 +88,10 @@
     <div id="page-exceptions" class="page">
       <div class="list-section">
         <h3 class="section-title" style="color:#ef5350;">缺少資料 / 異常明細</h3>
-        <p style="font-size:12px; color:#666; margin-top:-5px; margin-bottom:15px;">以下明細關聯已被刪除，請重新編輯或刪除。</p>
-        <div id="exceptionList" class="expense-list"><div class="empty-state">載入中...</div></div>
+        <p style="font-size:12px; color:#666; margin-top:-5px; margin-bottom:15px;">以下明細的關聯項目已被刪除，請重新編輯補齊資料或永久刪除。</p>
+        <div id="exceptionList" class="expense-list">
+          <div class="empty-state">載入中...</div>
+        </div>
       </div>
     </div>
 
@@ -76,8 +100,11 @@
         <button id="backToChartBtn" class="icon-btn-gray" style="font-size: 16px; margin-right: 10px; background: #e0e0e0; padding: 6px 12px; border-radius: 20px;">◀ 返回統計</button>
         <h3 id="pageChartDetailTitle" style="margin: 0; color: var(--primary);">分類明細</h3>
       </div>
-      <div class="list-section"><div id="pageChartDetailList" class="expense-list"></div></div>
+      <div class="list-section">
+        <div id="pageChartDetailList" class="expense-list"></div>
+      </div>
     </div>
+
   </main>
 
   <nav class="bottom-nav">
