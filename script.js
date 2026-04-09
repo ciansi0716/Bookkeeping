@@ -12,6 +12,7 @@ let selectedDateStr = formatDate(new Date());
 let currentChartDetailLabel = '';
 
 let compareMode = 'year'; 
+let compareSelectedPeriods = [];
 const compareColors = ['#F44336', '#2196F3', '#4CAF50', '#FF9800', '#9C27B0'];
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -546,8 +547,11 @@ window.quickAdd = function(type) {
             if (type === '小分類') document.getElementById('subCategory').value = payload.name;
             if (type === '專案') document.getElementById('project').value = payload.name;
             renderManageLists(); 
+        } else {
+            alert('儲存失敗：' + res.message);
         }
     })
+    .catch(err => { alert('網路錯誤或伺服器無回應'); })
     .finally(() => { btn.innerText = document.getElementById('expenseOperation').value === 'edit' ? '儲存修改' : '儲存新增'; btn.disabled = false; });
 }
 
@@ -912,9 +916,6 @@ window.openChartDetail = function(label) {
     document.getElementById('page-chart-detail').classList.add('active');
 };
 
-// ==========================================
-// 比較頁面 動態圖表與文字報表邏輯
-// ==========================================
 window.renderComparePage = function() {
     let sYearStr = document.getElementById('compareStartYear').value;
     let eYearStr = document.getElementById('compareEndYear').value;
@@ -996,7 +997,7 @@ window.renderComparePage = function() {
     const chartW = width - padX * 2;
     const chartH = height - padY * 2;
 
-    // 【新增】圖例文字區塊
+    // 繪製圖例 (Legend)
     let legendHtml = `<div style="display:flex; justify-content:center; gap:15px; margin-bottom:10px; flex-wrap:wrap;">`;
     datasets.forEach(ds => {
         legendHtml += `<div style="display:flex; align-items:center; gap:5px; font-size:13px; font-weight:bold; color:#555;">
@@ -1037,7 +1038,6 @@ window.renderComparePage = function() {
             let y = padY + chartH - (val/maxVal) * chartH;
             svg += `<circle cx="${x}" cy="${y}" r="4" fill="white" stroke="${ds.color}" stroke-width="2" />`;
             
-            // 放大文字
             if (val >= 0) {
                 svg += `<text x="${x}" y="${y - 12}" font-size="13" text-anchor="middle" fill="#444" font-weight="bold">$${val.toLocaleString()}</text>`;
             }
@@ -1144,8 +1144,11 @@ document.getElementById('expenseForm').onsubmit = function(e) {
                 alert(data.operation === 'add' ? '新增成功！' : '修改成功！');
                 document.getElementById('addModal').style.display = 'none';
                 fetchData(); 
+            } else {
+                alert('儲存失敗：' + res.message);
             }
         })
+        .catch(err => { alert('網路錯誤或伺服器無回應'); })
         .finally(() => { btn.innerText = '儲存'; btn.disabled = false; });
 };
 
@@ -1216,7 +1219,10 @@ document.getElementById('manageItemForm').onsubmit = function(e) {
             if(res.status === 'success') {
                 document.getElementById('manageItemModal').style.display = 'none';
                 fetchData(); 
+            } else {
+                alert('儲存失敗：' + res.message);
             }
         })
+        .catch(err => { alert('網路錯誤或伺服器無回應'); })
         .finally(() => { btn.innerText = '儲存'; btn.disabled = false; });
 };
