@@ -913,7 +913,7 @@ window.openChartDetail = function(label) {
 };
 
 // ==========================================
-// 【更新】比較頁面 動態圖表與文字報表邏輯
+// 比較頁面 動態圖表與文字報表邏輯
 // ==========================================
 window.renderComparePage = function() {
     let sYearStr = document.getElementById('compareStartYear').value;
@@ -996,6 +996,7 @@ window.renderComparePage = function() {
     const chartW = width - padX * 2;
     const chartH = height - padY * 2;
 
+    // 【新增】圖例文字區塊
     let legendHtml = `<div style="display:flex; justify-content:center; gap:15px; margin-bottom:10px; flex-wrap:wrap;">`;
     datasets.forEach(ds => {
         legendHtml += `<div style="display:flex; align-items:center; gap:5px; font-size:13px; font-weight:bold; color:#555;">
@@ -1200,8 +1201,8 @@ document.getElementById('manageItemForm').onsubmit = function(e) {
 
     const type = document.getElementById('manageType').value;
     const parentName = type === '小分類' ? document.getElementById('manageParentCatInput').value : "";
-    const icon = document.getElementById('manageIconInput').value;
-    const color = document.getElementById('manageColorInput').value;
+    const icon = document.getElementById('manageIconInput').value.trim();
+    const color = document.getElementById('manageColorInput').value.trim();
 
     const payload = {
         action: 'manage', operation: document.getElementById('manageOperation').value,
