@@ -9,22 +9,20 @@
 <body>
 
   <header class="app-header">
-    <div class="header-left">
-      <select id="globalLedgerSelect"><option value="日常帳本">日常帳本</option></select>
-    </div>
+    <div class="header-left"><select id="globalLedgerSelect"><option value="日常帳本">日常帳本</option></select></div>
     <div class="header-title" id="headerTitle">日概況</div>
     <div class="header-right"></div>
   </header>
 
   <main class="app-main">
-    
     <div id="page-home" class="page active">
       <div class="calendar-section">
-        <div class="calendar-header">
-          <button id="prevMonth">◀</button>
-          <span id="currentMonthYear"></span>
-          <button id="nextMonth">▶</button>
-        </div>
+        <div class="calendar-header"><button id="prevMonth">◀</button>
+          <div class="calendar-selects">
+            <select id="calYearSelect"></select>
+            <select id="calMonthSelect"></select>
+          </div>
+        <button id="nextMonth">▶</button></div>
         <div class="calendar-grid" id="calendarGrid"></div>
       </div>
       <div class="list-section">
@@ -39,27 +37,42 @@
     <div id="page-charts" class="page" style="background:#f0f2f5; padding:0; min-height:100vh;">
       <div class="chart-header-area">
         <div class="chart-filter-row">
-          <select id="chartInOutSelect">
-            <option value="支出">支出</option>
-            <option value="收入">收入</option>
-            <option value="總收支">總收支</option>
-          </select>
-          <select id="chartTimeSelect">
-            <option value="本月">本月</option>
-            <option value="當年">當年</option>
-            <option value="歷年">歷年</option>
-          </select>
+          <select id="chartInOutSelect"><option value="支出">支出</option><option value="收入">收入</option><option value="總收支">總收支</option></select>
+          <select id="chartTimeSelect"><option value="本月">本月</option><option value="當年">當年</option><option value="歷年">歷年</option></select>
           <select id="chartYearSelect"></select>
           <select id="chartMonthSelect"></select>
-          <select id="chartUserSelect">
-            <option value="全使用者">全使用者</option>
-          </select>
+          <select id="chartUserSelect"><option value="全付款人">全付款人</option></select>
+          <select id="chartTargetUserSelect"><option value="全被使用者">全被使用者</option></select>
+          <select id="chartProjectSelect"><option value="全專案">全專案</option></select>
         </div>
-        <div class="chart-summary-box">
-          <span id="chartSummaryText">總支出: $0</span>
-        </div>
+        <div class="chart-summary-box"><span id="chartSummaryText">總支出: $0</span></div>
       </div>
       <div class="custom-bars-container" id="customChartBars"></div>
+    </div>
+
+    <div id="page-compare" class="page" style="background:#f0f2f5; padding:15px; min-height:100vh;">
+      <div class="chart-header-area" style="background:white; margin-bottom:15px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); padding: 15px 10px;">
+        <div class="chart-filter-row" style="margin-bottom:12px;">
+          <select id="compareModeSelect" style="flex:1;">
+            <option value="year">年度歷史趨勢 (各年總和)</option>
+            <option value="month">單月歷史趨勢 (同月比較)</option> 
+          </select>
+        </div>
+        
+        <div class="chart-filter-row" style="margin-bottom:5px; justify-content:center; align-items:center; gap:8px;">
+          <select id="compareStartYear" style="flex:1;"></select>
+          <span style="font-weight:bold; color:#888;">至</span>
+          <select id="compareEndYear" style="flex:1;"></select>
+          <select id="compareMonth" style="flex:1; display:none;">
+            <option value="1">1月</option><option value="2">2月</option><option value="3">3月</option>
+            <option value="4">4月</option><option value="5">5月</option><option value="6">6月</option>
+            <option value="7">7月</option><option value="8">8月</option><option value="9">9月</option>
+            <option value="10">10月</option><option value="11">11月</option><option value="12">12月</option>
+          </select>
+        </div>
+        <div id="compareChartArea" style="width:100%; height:260px; margin-top:10px;"></div>
+      </div>
+      <div id="compareSummaryArea"></div>
     </div>
 
     <div id="page-manage" class="page">
@@ -67,8 +80,8 @@
         <div class="tab-item active" data-target="manage-content-ledgers">帳本</div>
         <div class="tab-item" data-target="manage-content-users">使用者</div>
         <div class="tab-item" data-target="manage-content-categories">分類</div>
+        <div class="tab-item" data-target="manage-content-projects">專案</div>
       </div>
-
       <div class="manage-content-container">
         <div id="manage-content-ledgers" class="manage-content active">
           <div class="section-header"><span>帳本列表</span><button class="add-item-btn-small" onclick="openManageModal('add', '帳本')">+</button></div>
@@ -82,16 +95,18 @@
           <div class="section-header"><span>大分類 (內含小分類)</span><button class="add-item-btn-small" onclick="openManageModal('add', '大分類')">+</button></div>
           <ul id="categoryList" class="manage-list-v2"></ul>
         </div>
+        <div id="manage-content-projects" class="manage-content">
+          <div class="section-header"><span>專案列表</span><button class="add-item-btn-small" onclick="openManageModal('add', '專案')">+</button></div>
+          <ul id="projectList" class="manage-list-v2"></ul>
+        </div>
       </div>
     </div>
 
     <div id="page-exceptions" class="page">
       <div class="list-section">
         <h3 class="section-title" style="color:#ef5350;">缺少資料 / 異常明細</h3>
-        <p style="font-size:12px; color:#666; margin-top:-5px; margin-bottom:15px;">以下明細的關聯項目已被刪除，請重新編輯補齊資料或永久刪除。</p>
-        <div id="exceptionList" class="expense-list">
-          <div class="empty-state">載入中...</div>
-        </div>
+        <p style="font-size:12px; color:#666; margin-top:-5px; margin-bottom:15px;">以下明細關聯已被刪除，請重新編輯或刪除。</p>
+        <div id="exceptionList" class="expense-list"><div class="empty-state">載入中...</div></div>
       </div>
     </div>
 
@@ -100,17 +115,15 @@
         <button id="backToChartBtn" class="icon-btn-gray" style="font-size: 16px; margin-right: 10px; background: #e0e0e0; padding: 6px 12px; border-radius: 20px;">◀ 返回統計</button>
         <h3 id="pageChartDetailTitle" style="margin: 0; color: var(--primary);">分類明細</h3>
       </div>
-      <div class="list-section">
-        <div id="pageChartDetailList" class="expense-list"></div>
-      </div>
+      <div class="list-section"><div id="pageChartDetailList" class="expense-list"></div></div>
     </div>
-
   </main>
 
   <nav class="bottom-nav">
-    <div class="nav-item active" data-target="page-home"><div class="icon">📅</div><span>日概況</span></div>
+    <div class="nav-item active" data-target="page-home"><div class="icon">📅</div><span>明細</span></div>
     <div class="nav-item emphasize" data-target="page-manage"><div class="icon-container"><div class="icon">⚙️</div></div><span>管理</span></div>
     <div class="nav-item" data-target="page-charts"><div class="icon">📈</div><span>統計</span></div>
+    <div class="nav-item" data-target="page-compare"><div class="icon">⚖️</div><span>比較</span></div>
     <div class="nav-item" data-target="page-exceptions"><div class="icon">⚠️</div><span>異常</span></div>
   </nav>
 
@@ -128,11 +141,15 @@
           <div class="col"><label>收支</label><select name="type"><option value="expense">支出</option><option value="income">收入</option></select></div>
           <div class="col"><label>金額</label><input type="number" name="amount" required></div>
         </div>
-        <div class="form-group"><label>使用者 <span class="quick-add" onclick="quickAdd('使用者')">➕新增</span></label><select id="user" name="user" required></select></div>
+        <div class="form-group row">
+          <div class="col"><label>付款人 <span class="quick-add" onclick="quickAdd('使用者')">➕新增</span></label><select id="user" name="user" required></select></div>
+          <div class="col"><label>被使用者</label><select id="targetUser" name="targetUser" required></select></div>
+        </div>
         <div class="form-group row">
           <div class="col"><label>大項目 <span class="quick-add" onclick="quickAdd('大分類')">➕新增</span></label><select id="mainCategory" name="mainCategory" required></select></div>
           <div class="col"><label>小項目 <span class="quick-add" onclick="quickAdd('小分類')">➕新增</span></label><select id="subCategory" name="subCategory" required></select></div>
         </div>
+        <div class="form-group"><label>專案 (選填) <span class="quick-add" onclick="quickAdd('專案')">➕新增</span></label><select id="project" name="project"><option value="">無</option></select></div>
         <div class="form-group"><label>備註</label><input type="text" name="content"></div>
         <button type="submit" class="submit-btn" id="submitBtn">儲存</button>
       </form>
@@ -147,17 +164,8 @@
         <input type="hidden" id="manageOperation"> <input type="hidden" id="manageType"> <input type="hidden" id="manageId"> 
         <div class="form-group" id="manageParentCatGroup" style="display:none;"><label>所屬大分類</label><select id="manageParentCatInput"></select></div>
         <div class="form-group"><label id="manageInputLabel">名稱</label><input type="text" id="manageNameInput" required></div>
-        
-        <div class="form-group" id="manageIconGroup" style="display:none;">
-          <label>圖示 (請輸入一個 Emoji)</label>
-          <input type="text" id="manageIconInput" maxlength="2" placeholder="例如: 🍔">
-        </div>
-        
-        <div class="form-group" id="manageColorGroup" style="display:none;">
-          <label>代表顏色</label>
-          <input type="color" id="manageColorInput" style="height:40px; padding:2px; cursor:pointer;">
-        </div>
-
+        <div class="form-group" id="manageIconGroup" style="display:none;"><label>圖示 (請輸入一個 Emoji)</label><input type="text" id="manageIconInput" maxlength="2" placeholder="例如: 🍔"></div>
+        <div class="form-group" id="manageColorGroup" style="display:none;"><label>代表顏色</label><input type="color" id="manageColorInput" style="height:40px; padding:2px; cursor:pointer;"></div>
         <button type="submit" class="submit-btn" id="manageSubmitBtn">儲存</button>
       </form>
     </div>
