@@ -443,21 +443,26 @@ window.renderDailyList = function() {
 
         let projectHtml = e.project ? `<span class="detail-project-tag">★ ${e.project}</span>` : '';
 
+        // 【修改】將備註改為獨立換行，黑色字體，無表情符號
         return `
-        <div style="display:flex; justify-content:space-between; padding:12px 0; border-bottom:1px solid #f0f0f0; align-items:center;">
-            <div style="display:flex; align-items:center; flex-wrap:wrap; gap:5px;">
-                <span class="cat-emoji">${emoji}</span>
-                <span class="detail-tag">${e.subCategory}</span>
-                ${projectHtml}
-                <span class="detail-user-tag" style="${userStyle}">${e.user}</span>
-                ${targetHtml}
-                ${e.content ? `<span style="font-size:13px; color:#888; margin-left:4px;">📝 ${e.content}</span>` : ''}
-            </div>
-            <div style="text-align:right;">
-                <div style="color:${color}; font-weight:bold; font-size:16px; margin-bottom:4px;">${sign}$${amt}</div>
-                <div style="display:flex; gap:8px; justify-content:flex-end;">
-                    <button class="icon-btn-gray" style="font-size:13px; background:#f5f5f5; padding:4px 8px; border-radius:4px;" onclick="editExpense('${e.id}')">✎</button>
-                    <button class="icon-btn-red" style="font-size:13px; background:#ffebee; padding:4px 8px; border-radius:4px;" onclick="deleteExpense('${e.id}')">✕</button>
+        <div style="padding:12px 0; border-bottom:1px solid #f0f0f0;">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                <div>
+                    <div style="display:flex; align-items:center; flex-wrap:wrap; gap:5px;">
+                        <span class="cat-emoji">${emoji}</span>
+                        <span class="detail-tag">${e.subCategory}</span>
+                        ${projectHtml}
+                        <span class="detail-user-tag" style="${userStyle}">${e.user}</span>
+                        ${targetHtml}
+                    </div>
+                    ${e.content ? `<div style="font-size:13.5px; color:#333; margin-top:8px; padding-left:40px; font-weight:500;">${e.content}</div>` : ''}
+                </div>
+                <div style="text-align:right;">
+                    <div style="color:${color}; font-weight:bold; font-size:16px; margin-bottom:4px;">${sign}$${amt}</div>
+                    <div style="display:flex; gap:8px; justify-content:flex-end;">
+                        <button class="icon-btn-gray" style="font-size:13px; background:#f5f5f5; padding:4px 8px; border-radius:4px;" onclick="editExpense('${e.id}')">✎</button>
+                        <button class="icon-btn-red" style="font-size:13px; background:#ffebee; padding:4px 8px; border-radius:4px;" onclick="deleteExpense('${e.id}')">✕</button>
+                    </div>
                 </div>
             </div>
         </div>`;
@@ -547,11 +552,8 @@ window.quickAdd = function(type) {
             if (type === '小分類') document.getElementById('subCategory').value = payload.name;
             if (type === '專案') document.getElementById('project').value = payload.name;
             renderManageLists(); 
-        } else {
-            alert('儲存失敗：' + res.message);
         }
     })
-    .catch(err => { alert('網路錯誤或伺服器無回應'); })
     .finally(() => { btn.innerText = document.getElementById('expenseOperation').value === 'edit' ? '儲存修改' : '儲存新增'; btn.disabled = false; });
 }
 
@@ -702,6 +704,7 @@ function updateFormSubCategory() {
     }
 }
 
+// 【更新】統計圖表渲染 (加入階層式：大項目與小項目總和)
 window.renderChart = function() {
     const container = document.getElementById('customChartBars');
     const inOutSel = document.getElementById('chartInOutSelect');
@@ -751,20 +754,31 @@ window.renderChart = function() {
         return true; 
     });
 
+    // 建立雙層資料結構：大項目包小項目
     let groupMap = {};
     let totalIncome = 0;
     let totalExpense = 0;
 
     filtered.forEach(e => {
-        let rawKey = e.mainCategory || '未分類';
+        let mainKey = e.mainCategory || '未分類';
+        let subKey = e.subCategory || '未分類';
         let amt = Number(e.amount) || 0;
         
+        if (!groupMap[mainKey]) groupMap[mainKey] = { total: 0, subs: {} };
+
         if (e.type === '支出') {
             totalExpense += amt;
-            groupMap[rawKey] = (groupMap[rawKey] || 0) - amt;
+            if (currentChartInOut === '支出' || currentChartInOut === '總收支') {
+                let val = (currentChartInOut === '總收支') ? -amt : amt;
+                groupMap[mainKey].total += val;
+                groupMap[mainKey].subs[subKey] = (groupMap[mainKey].subs[subKey] || 0) + val;
+            }
         } else {
             totalIncome += amt;
-            groupMap[rawKey] = (groupMap[rawKey] || 0) + amt;
+            if (currentChartInOut === '收入' || currentChartInOut === '總收支') {
+                groupMap[mainKey].total += amt;
+                groupMap[mainKey].subs[subKey] = (groupMap[mainKey].subs[subKey] || 0) + amt;
+            }
         }
     });
 
@@ -789,40 +803,49 @@ window.renderChart = function() {
         summaryBox.style.background = '#e3f2fd'; summaryBox.style.borderColor = '#bbdefb'; summaryEl.style.color = net >= 0 ? '#4CAF50' : '#ef5350';
     }
 
-    let chartData = Object.keys(groupMap).map(k => {
-        let displayLabel = `<span class="cat-emoji" style="width:22px;height:22px;font-size:13px;">${getIcon(k, '大分類')}</span> ${k}`;
-        return { rawLabel: k, displayLabel: displayLabel, value: groupMap[k] };
-    });
+    let mainKeys = Object.keys(groupMap).sort((a, b) => Math.abs(groupMap[b].total) - Math.abs(groupMap[a].total));
 
-    if (currentChartInOut === '支出') {
-        chartData = chartData.map(d => ({ rawLabel: d.rawLabel, displayLabel: d.displayLabel, value: Math.abs(d.value) }));
-        chartData.sort((a, b) => b.value - a.value);
-    } else {
-        chartData.sort((a, b) => b.value - a.value); 
-    }
-
-    if(chartData.length === 0) {
+    if(mainKeys.length === 0) {
         container.innerHTML = '<div style="text-align:center; padding: 30px; color:#999; font-weight:bold;">這個時段沒有資料</div>';
         return;
     }
 
-    const maxVal = Math.max(...chartData.map(d => Math.abs(d.value)), 1);
-    container.innerHTML = chartData.map(item => {
-        const percent = Math.max((Math.abs(item.value) / maxVal) * 100, 5); 
+    const maxVal = Math.max(...mainKeys.map(k => Math.abs(groupMap[k].total)), 1);
+    
+    // 生成包含小項目的長條圖結構
+    container.innerHTML = mainKeys.map(mainName => {
+        let mainObj = groupMap[mainName];
+        const percent = Math.max((Math.abs(mainObj.total) / maxVal) * 100, 5); 
         
         let barColor = '#ef5350'; 
         if (currentChartInOut === '收入') barColor = '#4CAF50'; 
-        else if (currentChartInOut === '總收支') barColor = item.value >= 0 ? '#4CAF50' : '#ef5350';
+        else if (currentChartInOut === '總收支') barColor = mainObj.total >= 0 ? '#4CAF50' : '#ef5350';
         
-        let displayVal = item.value >= 0 ? `$${item.value.toLocaleString()}` : `-$${Math.abs(item.value).toLocaleString()}`;
+        let displayVal = mainObj.total >= 0 ? `$${mainObj.total.toLocaleString()}` : `-$${Math.abs(mainObj.total).toLocaleString()}`;
+        let displayLabel = `<span class="cat-emoji" style="width:22px;height:22px;font-size:13px;">${getIcon(mainName, '大分類')}</span> ${mainName}`;
+
+        // 排序並產生小項目 HTML
+        let subKeys = Object.keys(mainObj.subs).sort((a, b) => Math.abs(mainObj.subs[b]) - Math.abs(mainObj.subs[a]));
+        let subHtml = subKeys.map(subName => {
+            let subVal = mainObj.subs[subName];
+            let subDisplay = subVal >= 0 ? `$${subVal.toLocaleString()}` : `-$${Math.abs(subVal).toLocaleString()}`;
+            return `
+            <div style="display:flex; justify-content:space-between; align-items:center; padding: 6px 0; border-bottom: 1px dashed #e0e0e0; font-size:13.5px;">
+                <span><span style="color:#ccc; font-size:10px; margin-right:6px;">▶</span>${subName}</span>
+                <span style="font-weight:bold; color:#555;">${subDisplay}</span>
+            </div>`;
+        }).join('');
 
         return `
-            <div class="custom-bar-row" style="cursor:pointer;" onclick="openChartDetail('${item.rawLabel}')">
-                <div class="bar-labels" style="align-items:center;">
-                    <div style="display:flex; align-items:center;">${item.displayLabel}</div>
+            <div class="custom-bar-row" style="margin-bottom:24px;">
+                <div class="bar-labels" style="align-items:center; cursor:pointer;" onclick="openChartDetail('${mainName}')">
+                    <div style="display:flex; align-items:center;">${displayLabel}</div>
                     <span class="bar-value" style="color:${barColor};">${displayVal} <span style="font-size:12px; color:#999;">▶</span></span>
                 </div>
-                <div class="bar-track"><div class="bar-fill" style="width: ${percent}%; background:${barColor};"></div></div>
+                <div class="bar-track" style="margin-bottom:8px;"><div class="bar-fill" style="width: ${percent}%; background:${barColor};"></div></div>
+                <div style="padding-left:35px; margin-top:5px;">
+                    ${subHtml}
+                </div>
             </div>`;
     }).join('');
 };
@@ -889,23 +912,25 @@ window.openChartDetail = function(label) {
             }
             let projectHtml = e.project ? `<span class="detail-project-tag">★ ${e.project}</span>` : '';
 
+            // 【修改】備註文字無表情符號，並換行顯示
             return `
-            <div style="display:flex; justify-content:space-between; padding:15px 0; border-bottom:1px solid #f0f0f0; align-items:center;">
-                <div>
-                    <div style="font-weight:bold; font-size:13px; color:#888; margin-bottom:6px;">${e.date}</div>
-                    <div style="display:flex; align-items:center; flex-wrap:wrap; gap:5px;">
-                        <span class="detail-tag">${e.subCategory}</span>
-                        ${projectHtml}
-                        <span class="detail-user-tag" style="${userStyle}">${e.user}</span>
-                        ${targetHtml}
+            <div style="padding:12px 0; border-bottom:1px solid #f0f0f0;">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                    <div>
+                        <div style="display:flex; align-items:center; flex-wrap:wrap; gap:5px;">
+                            <span class="detail-tag">${e.subCategory}</span>
+                            ${projectHtml}
+                            <span class="detail-user-tag" style="${userStyle}">${e.user}</span>
+                            ${targetHtml}
+                        </div>
+                        ${e.content ? `<div style="font-size:13.5px; color:#333; margin-top:8px; font-weight:500;">${e.content}</div>` : ''}
                     </div>
-                    ${e.content ? `<div style="font-size:13px; color:#666; margin-top:6px;">📝 ${e.content}</div>` : ''}
-                </div>
-                <div style="text-align:right;">
-                    <div style="color:${color}; font-weight:bold; font-size:16px; margin-bottom:8px;">${sign}$${e.amount}</div>
-                    <div style="display:flex; gap:8px; justify-content:flex-end;">
-                        <button class="icon-btn-gray" style="font-size:13px; background:#f5f5f5; padding:4px 8px; border-radius:4px;" onclick="editExpense('${e.id}')">✎</button>
-                        <button class="icon-btn-red" style="font-size:13px; background:#ffebee; padding:4px 8px; border-radius:4px;" onclick="deleteExpense('${e.id}')">✕</button>
+                    <div style="text-align:right;">
+                        <div style="color:${color}; font-weight:bold; font-size:16px; margin-bottom:8px;">${sign}$${e.amount}</div>
+                        <div style="display:flex; gap:8px; justify-content:flex-end;">
+                            <button class="icon-btn-gray" style="font-size:13px; background:#f5f5f5; padding:4px 8px; border-radius:4px;" onclick="editExpense('${e.id}')">✎</button>
+                            <button class="icon-btn-red" style="font-size:13px; background:#ffebee; padding:4px 8px; border-radius:4px;" onclick="deleteExpense('${e.id}')">✕</button>
+                        </div>
                     </div>
                 </div>
             </div>`;
@@ -916,6 +941,9 @@ window.openChartDetail = function(label) {
     document.getElementById('page-chart-detail').classList.add('active');
 };
 
+// ==========================================
+// 比較頁面 動態圖表與文字報表邏輯
+// ==========================================
 window.renderComparePage = function() {
     let sYearStr = document.getElementById('compareStartYear').value;
     let eYearStr = document.getElementById('compareEndYear').value;
@@ -997,7 +1025,6 @@ window.renderComparePage = function() {
     const chartW = width - padX * 2;
     const chartH = height - padY * 2;
 
-    // 繪製圖例 (Legend)
     let legendHtml = `<div style="display:flex; justify-content:center; gap:15px; margin-bottom:10px; flex-wrap:wrap;">`;
     datasets.forEach(ds => {
         legendHtml += `<div style="display:flex; align-items:center; gap:5px; font-size:13px; font-weight:bold; color:#555;">
@@ -1009,14 +1036,12 @@ window.renderComparePage = function() {
 
     let svg = `<svg width="100%" height="${height}">`;
 
-    // 畫 Y 軸刻度文字 (無橫向底線)
     for(let i=0; i<=4; i++) {
         let y = padY + chartH - (i/4)*chartH;
         let val = Math.round((i/4)*maxVal);
         svg += `<text x="${padX-5}" y="${y+4}" font-size="11" text-anchor="end" fill="#999">${val}</text>`;
     }
 
-    // 畫 X 軸刻度
     let step = Math.ceil(xLabels.length / 10); 
     xLabels.forEach((lbl, i) => {
         let x = padX + (i / (xLabels.length-1)) * chartW;
@@ -1124,6 +1149,7 @@ window.deleteExpense = function(id) {
         .then(r => r.json()).then(res => { if(res.status === 'success') fetchData(); });
 };
 
+// 【修復】強制從 input 讀取明確的 operation 值，杜絕產生兩筆資料的可能
 document.getElementById('expenseForm').onsubmit = function(e) {
     e.preventDefault();
     const btn = document.getElementById('submitBtn');
@@ -1132,8 +1158,8 @@ document.getElementById('expenseForm').onsubmit = function(e) {
     const formData = new FormData(this);
     const data = Object.fromEntries(formData.entries());
     
+    data.operation = document.getElementById('expenseOperation').value;
     if (!data.targetUser) data.targetUser = data.user;
-    
     data.action = 'expense'; 
     data.ledgerName = document.getElementById('globalLedgerSelect').value;
 
