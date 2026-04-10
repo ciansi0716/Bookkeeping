@@ -54,15 +54,17 @@
       <div class="chart-header-area" style="background:white; margin-bottom:15px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); padding: 15px 10px;">
         <div class="chart-filter-row" style="margin-bottom:12px;">
           <select id="compareModeSelect" style="flex:1;">
+            <option value="currentYearMonth">當年月份趨勢 (1-12月)</option>
             <option value="year">年度歷史趨勢 (各年總和)</option>
             <option value="month">單月歷史趨勢 (同月比較)</option> 
           </select>
         </div>
         
         <div class="chart-filter-row" style="margin-bottom:5px; justify-content:center; align-items:center; gap:8px;">
-          <select id="compareStartYear" style="flex:1;"></select>
-          <span style="font-weight:bold; color:#888;">至</span>
-          <select id="compareEndYear" style="flex:1;"></select>
+          <select id="compareBaseYear" style="flex:1;"></select>
+          
+          <span id="compareRangeLabel" style="font-weight:bold; color:#888; display:none;">至</span>
+          <select id="compareEndYear" style="flex:1; display:none;"></select>
           <select id="compareMonth" style="flex:1; display:none;">
             <option value="1">1月</option><option value="2">2月</option><option value="3">3月</option>
             <option value="4">4月</option><option value="5">5月</option><option value="6">6月</option>
@@ -105,7 +107,7 @@
     <div id="page-exceptions" class="page">
       <div class="list-section">
         <h3 class="section-title" style="color:#ef5350;">缺少資料 / 異常明細</h3>
-        <p style="font-size:12px; color:#666; margin-top:-5px; margin-bottom:15px;">以下明細關聯已被刪除，請重新編輯或刪除。</p>
+        <p style="font-size:12px; color:#666; margin-top:-5px; margin-bottom:15px;">以下明細關聯已被刪除，或手動調整了帳目。請重新編輯補齊分類或刪除。</p>
         <div id="exceptionList" class="expense-list"><div class="empty-state">載入中...</div></div>
       </div>
     </div>
@@ -136,10 +138,13 @@
         <input type="hidden" id="expenseOperation" name="operation" value="add">
         <input type="hidden" id="formLedger" name="ledgerName">
         
-        <div class="form-group"><label>日期</label><input type="date" id="date" name="date" required></div>
         <div class="form-group row">
+          <div class="col"><label>日期</label><input type="date" id="date" name="date" required></div>
           <div class="col"><label>收支</label><select name="type"><option value="expense">支出</option><option value="income">收入</option></select></div>
+        </div>
+        <div class="form-group row">
           <div class="col"><label>金額</label><input type="number" name="amount" required></div>
+          <div class="col"><label>付款方式</label><select id="payMethod" name="payMethod"><option value="存款">存款</option><option value="信用卡">信用卡</option></select></div>
         </div>
         <div class="form-group row">
           <div class="col"><label>付款人 <span class="quick-add" onclick="quickAdd('使用者')">➕新增</span></label><select id="user" name="user" required></select></div>
@@ -164,12 +169,43 @@
         <input type="hidden" id="manageOperation"> <input type="hidden" id="manageType"> <input type="hidden" id="manageId"> 
         <div class="form-group" id="manageParentCatGroup" style="display:none;"><label>所屬大分類</label><select id="manageParentCatInput"></select></div>
         <div class="form-group"><label id="manageInputLabel">名稱</label><input type="text" id="manageNameInput" required></div>
-        
         <div class="form-group" id="manageIconGroup" style="display:none;"><label>圖示 (請輸入一個 Emoji)</label><input type="text" id="manageIconInput" placeholder="例如: 🍔"></div>
-        
         <div class="form-group" id="manageColorGroup" style="display:none;"><label>代表顏色</label><input type="color" id="manageColorInput" style="height:40px; padding:2px; cursor:pointer;"></div>
         <button type="submit" class="submit-btn" id="manageSubmitBtn">儲存</button>
       </form>
+    </div>
+  </div>
+
+  <div id="adjustBalanceModal" class="modal">
+    <div class="modal-content">
+      <span class="close-btn" onclick="document.getElementById('adjustBalanceModal').style.display='none'">&times;</span>
+      <h2 style="margin-top:0;">校正目前餘額</h2>
+      <div style="background:#f9f9f9; padding:10px; border-radius:6px; margin-bottom:15px; font-size:14px; color:#555;">
+        <div>使用者：<span id="adjUserName" style="font-weight:bold; color:#333; font-size:16px;"></span></div>
+      </div>
+      
+      <div class="form-group row">
+        <div class="col">
+            <label>校正帳戶</label>
+            <select id="adjAccountType" onchange="updateAdjustDisplay()" style="font-weight:bold; color:#1976d2;">
+                <option value="存款">存款餘額</option>
+                <option value="信用卡">信用卡可用餘額</option>
+            </select>
+        </div>
+        <div class="col">
+            <label>系統計算目前額度</label>
+            <div style="padding:10px; background:#e3f2fd; border-radius:6px; font-weight:bold; color:#1565c0; font-size:16px;">
+                $<span id="adjSysBalance">0</span>
+            </div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>請輸入實際可用餘額 (手邊真實金額)</label>
+        <input type="number" id="adjActualBalance" required style="font-size:18px; font-weight:bold; color:#1976d2; padding:12px;">
+      </div>
+      <div id="adjDiffDisplay" style="margin-bottom:15px; font-weight:bold; font-size:14px; min-height:20px;"></div>
+      <button class="submit-btn" id="adjSubmitBtn" onclick="submitBalanceAdjustment()">確認新增差額</button>
     </div>
   </div>
 

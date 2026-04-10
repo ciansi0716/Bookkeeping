@@ -11,7 +11,7 @@ let currentCalDate = new Date();
 let selectedDateStr = formatDate(new Date());
 let currentChartDetailLabel = '';
 
-let compareMode = 'year'; 
+let compareMode = 'currentYearMonth'; 
 let compareSelectedPeriods = [];
 const compareColors = ['#F44336', '#2196F3', '#4CAF50', '#FF9800', '#9C27B0'];
 
@@ -184,18 +184,21 @@ function initUI() {
     }
 
     const compModeSel = document.getElementById('compareModeSelect');
-    const compStartYear = document.getElementById('compareStartYear');
+    const compBaseYear = document.getElementById('compareBaseYear');
     const compEndYear = document.getElementById('compareEndYear');
+    const compRangeLabel = document.getElementById('compareRangeLabel');
     const compMonth = document.getElementById('compareMonth');
 
     if(compModeSel) {
         compModeSel.addEventListener('change', () => {
             compareMode = compModeSel.value;
-            compMonth.style.display = compareMode === 'month' ? 'inline-block' : 'none';
+            if(compRangeLabel) compRangeLabel.style.display = (compareMode === 'year') ? 'inline-block' : 'none';
+            if(compEndYear) compEndYear.style.display = (compareMode === 'year') ? 'inline-block' : 'none';
+            if(compMonth) compMonth.style.display = (compareMode === 'month') ? 'inline-block' : 'none';
             renderComparePage();
         });
     }
-    [compStartYear, compEndYear, compMonth].forEach(el => {
+    [compBaseYear, compEndYear, compMonth].forEach(el => {
         if(el) el.addEventListener('change', renderComparePage);
     });
 
@@ -211,6 +214,7 @@ function initUI() {
         document.getElementById('expenseOperation').value = 'add';
         document.getElementById('submitBtn').innerText = '儲存新增';
         document.getElementById('date').value = selectedDateStr; 
+        document.getElementById('payMethod').value = '存款'; // 預設為存款
         updateFormDropdowns();
         document.getElementById('addModal').style.display = 'flex';
     };
@@ -248,38 +252,30 @@ function initDateSelects() {
 }
 
 function initCompareDropdowns() {
-    const sY = document.getElementById('compareStartYear');
-    const eY = document.getElementById('compareEndYear');
-    const cM = document.getElementById('compareMonth');
-    if(!sY || !eY || !cM) return;
+    const baseYear = document.getElementById('compareBaseYear');
+    const endYear = document.getElementById('compareEndYear');
+    if(!baseYear || !endYear) return;
 
-    let uniqueYears = new Set();
-    validExpenseData.forEach(e => {
-        if(e.date) { let parts = e.date.split('-'); if(parts.length > 0) uniqueYears.add(parts[0]); }
-    });
-    let yearsArray = Array.from(uniqueYears).sort((a,b) => a - b); 
+    let uniqueYears = Array.from(new Set(validExpenseData.map(e => {
+        if(!e.date) return null;
+        return e.date.split('-')[0];
+    }).filter(Boolean))).sort();
+    
+    if(uniqueYears.length === 0) uniqueYears = [new Date().getFullYear().toString()];
 
-    if (yearsArray.length === 0) {
-        sY.innerHTML = `<option value="">無</option>`;
-        eY.innerHTML = `<option value="">無</option>`;
-        return;
+    let yHtml = uniqueYears.map(y => `<option value="${y}">${y}年</option>`).join('');
+    baseYear.innerHTML = yHtml;
+    endYear.innerHTML = yHtml;
+
+    // 預設為最新年份
+    baseYear.value = uniqueYears[uniqueYears.length - 1];
+    
+    // 如果有兩年以上，結束年份預設為倒數第二年（用作範圍）
+    if (uniqueYears.length > 1) {
+        endYear.value = uniqueYears[uniqueYears.length - 2];
+    } else {
+        endYear.value = uniqueYears[uniqueYears.length - 1];
     }
-
-    let yHtml = yearsArray.map(y => `<option value="${y}">${y}年</option>`).join('');
-    
-    let curStart = sY.value;
-    let curEnd = eY.value;
-
-    sY.innerHTML = yHtml;
-    eY.innerHTML = yHtml;
-
-    if (yearsArray.includes(curStart)) sY.value = curStart;
-    else sY.value = yearsArray.length > 1 ? yearsArray[yearsArray.length - 2] : yearsArray[0];
-
-    if (yearsArray.includes(curEnd)) eY.value = curEnd;
-    else eY.value = yearsArray[yearsArray.length - 1];
-    
-    if (!cM.value) cM.value = new Date().getMonth() + 1;
 }
 
 function updateChartDropdowns() {
@@ -356,6 +352,10 @@ function getExceptionReason(exp) {
     if (!appData['使用者'].find(u => u.name === exp.user)) reasons.push("付款人");
     let tUser = exp.targetUser || exp.user;
     if (!appData['使用者'].find(u => u.name === tUser)) reasons.push("被使用者");
+    
+    // 如果是校正明細刻意產生的，讓它維持異常
+    if (exp.mainCategory.includes('校正') && exp.subCategory === '未選擇小項目') return "請為手動校正差額選擇正確的分類";
+
     if (!appData['大分類'].find(c => c.name === exp.mainCategory)) reasons.push("大分類");
     if (!appData['小分類'].find(c => c.name === exp.subCategory)) reasons.push("小分類");
     if (reasons.length > 0) return `缺少 ${reasons.join('、')} 資料`;
@@ -375,6 +375,14 @@ function fetchData() {
         appData['小分類'] = (res.manageData || []).filter(d => d.type === '小分類');
         appData['專案'] = (res.manageData || []).filter(d => d.type === '專案'); 
         
+        // 🌟 自動注入信用卡預設分類 (如果不存在)
+        if (!appData['大分類'].find(c => c.name === '信用卡')) {
+            appData['大分類'].push({ id: 'cc_main', name: '信用卡', parentName: '', icon: '💳', color: '' });
+        }
+        if (!appData['小分類'].find(c => c.name === '繳信用卡')) {
+            appData['小分類'].push({ id: 'cc_sub', name: '繳信用卡', parentName: '信用卡', icon: '💳', color: '' });
+        }
+
         validExpenseData = [];
         exceptionExpenseData = [];
         
@@ -387,6 +395,8 @@ function fetchData() {
                     e.date = e.date.substring(0, 10);
                 }
             }
+            e.payMethod = e.payMethod || '存款';
+
             let reason = getExceptionReason(e);
             if (reason) { e.exceptionReason = reason; exceptionExpenseData.push(e); } 
             else { validExpenseData.push(e); }
@@ -426,8 +436,14 @@ window.renderDailyList = function() {
     
     let listHTML = dailyData.map(e => {
         const amt = Number(e.amount) || 0;
-        if(e.type === '支出') dailyExpense += amt;
-        else if(e.type === '收入') dailyIncome += amt; 
+        
+        // 🌟 核心過濾規則：只有當 大項目=信用卡 且 小項目=繳信用卡 且 是支出時，才不計入每日淨收支
+        let isPayingCreditCardBill = (e.mainCategory === '信用卡' && e.subCategory === '繳信用卡' && e.type === '支出');
+        
+        if (!isPayingCreditCardBill) {
+            if(e.type === '支出') dailyExpense += amt;
+            else if(e.type === '收入') dailyIncome += amt; 
+        }
         
         const color = e.type === '收入' ? '#4CAF50' : '#ef5350';
         const sign = e.type === '收入' ? '+' : '-';
@@ -442,8 +458,8 @@ window.renderDailyList = function() {
         }
 
         let projectHtml = e.project ? `<span class="detail-project-tag">★ ${e.project}</span>` : '';
+        let payBadge = e.payMethod === '信用卡' ? `<span class="detail-project-tag" style="background:#e3f2fd; color:#1565c0; border-color:#bbdefb;">信用卡</span>` : `<span class="detail-project-tag" style="background:#e8f5e9; color:#2e7d32; border-color:#c8e6c9;">存款</span>`;
 
-        // 【修改】將備註改為獨立換行，黑色字體，無表情符號
         return `
         <div style="padding:12px 0; border-bottom:1px solid #f0f0f0;">
             <div style="display:flex; justify-content:space-between; align-items:flex-start;">
@@ -451,6 +467,7 @@ window.renderDailyList = function() {
                     <div style="display:flex; align-items:center; flex-wrap:wrap; gap:5px;">
                         <span class="cat-emoji">${emoji}</span>
                         <span class="detail-tag">${e.subCategory}</span>
+                        ${payBadge}
                         ${projectHtml}
                         <span class="detail-user-tag" style="${userStyle}">${e.user}</span>
                         ${targetHtml}
@@ -475,7 +492,7 @@ window.renderDailyList = function() {
 
     const summaryHTML = `
         <div style="background:${netBg}; padding:10px; border-radius:6px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; font-weight:bold; color:${netColor};">
-            <span>本日淨收支</span>
+            <span>本日淨收支 (已排除繳卡費)</span>
             <span style="font-size:18px;">${netSign}$${Math.abs(netAmount).toLocaleString()}</span>
         </div>`;
     list.innerHTML = summaryHTML + listHTML;
@@ -575,20 +592,50 @@ window.renderManageLists = function() {
     
     const userContainer = document.getElementById('userList');
     if(userContainer) {
-        userContainer.innerHTML = appData['使用者'].map(item => {
+        let totalAllDeposit = 0;
+        let totalAllCredit = 0; 
+        
+        let userHtml = appData['使用者'].map(item => {
             const c = item.color || '#1976d2';
+            const balances = getUserBalance(item.name); // 取得存款與信用卡餘額
+            totalAllDeposit += balances.deposit; 
+            totalAllCredit += balances.credit;
+            
             return `
             <li class="cat-item">
                 <div class="item-header">
                     <div class="item-icon" style="background-color:${c}20; color:${c}; border:1px solid ${c}50; font-size:14px; font-weight:bold;">色</div>
-                    <div class="item-content">${item.name}</div>
+                    <div class="item-content">
+                        <div style="font-size:16px;">${item.name}</div>
+                        <div style="font-size:13px; color:#888; margin-top:3px; display:flex; gap:10px;">
+                            <span>存款: <span style="color:${balances.deposit>=0?'#4CAF50':'#ef5350'}; font-weight:bold;">$${balances.deposit.toLocaleString()}</span></span>
+                            <span>信用卡: <span style="color:${balances.credit>=0?'#1976d2':'#ef5350'}; font-weight:bold;">$${balances.credit.toLocaleString()}</span></span>
+                        </div>
+                    </div>
                     <div class="item-actions">
+                        <button class="icon-btn-gray" style="font-size:13px; background:#fff3e0; color:#e65100; padding:4px 8px; border-radius:4px; font-weight:bold;" onclick="openAdjustBalanceModal('${item.name}')">校正</button>
                         <button class="icon-btn-gray" onclick="openManageModal('edit', '使用者', '${item.id}', '${item.name}', '', '', '${c}')">✎</button>
                         <button class="icon-btn-red" onclick="deleteItem('使用者', '${item.id}')">✕</button>
                     </div>
                 </div>
             </li>`;
         }).join('');
+        
+        // 頂部總存款面板
+        let totalHtml = `
+        <div style="background:#e3f2fd; border:1px solid #bbdefb; padding:12px; border-radius:8px; margin-bottom:15px; display:flex; justify-content:space-around; align-items:center;">
+            <div style="text-align:center;">
+                <div style="font-weight:bold; color:#1565c0; font-size:13px;">系統總存款</div>
+                <div style="font-size:18px; font-weight:bold; color:#1976d2;">$${totalAllDeposit.toLocaleString()}</div>
+            </div>
+            <div style="width:1px; background:#bbdefb; height:30px;"></div>
+            <div style="text-align:center;">
+                <div style="font-weight:bold; color:#1565c0; font-size:13px;">信用卡總可用額度</div>
+                <div style="font-size:18px; font-weight:bold; color:#1976d2;">$${totalAllCredit.toLocaleString()}</div>
+            </div>
+        </div>`;
+        
+        userContainer.innerHTML = totalHtml + userHtml;
     }
 
     const catContainer = document.getElementById('categoryList');
@@ -704,7 +751,7 @@ function updateFormSubCategory() {
     }
 }
 
-// 【更新】統計圖表渲染 (加入階層式：大項目與小項目總和)
+// 【更新】統計圖表渲染 (排除繳卡費)
 window.renderChart = function() {
     const container = document.getElementById('customChartBars');
     const inOutSel = document.getElementById('chartInOutSelect');
@@ -727,6 +774,9 @@ window.renderChart = function() {
     
     let filtered = validExpenseData;
     
+    // 🌟 核心過濾規則：排除大項目為「信用卡」且小項目為「繳信用卡」的支出
+    filtered = filtered.filter(e => !(e.mainCategory === '信用卡' && e.subCategory === '繳信用卡' && e.type === '支出'));
+
     if (currentChartInOut === '支出') filtered = filtered.filter(e => e.type === '支出');
     else if (currentChartInOut === '收入') filtered = filtered.filter(e => e.type === '收入');
 
@@ -754,7 +804,6 @@ window.renderChart = function() {
         return true; 
     });
 
-    // 建立雙層資料結構：大項目包小項目
     let groupMap = {};
     let totalIncome = 0;
     let totalExpense = 0;
@@ -812,7 +861,6 @@ window.renderChart = function() {
 
     const maxVal = Math.max(...mainKeys.map(k => Math.abs(groupMap[k].total)), 1);
     
-    // 生成包含小項目的長條圖結構
     container.innerHTML = mainKeys.map(mainName => {
         let mainObj = groupMap[mainName];
         const percent = Math.max((Math.abs(mainObj.total) / maxVal) * 100, 5); 
@@ -824,7 +872,6 @@ window.renderChart = function() {
         let displayVal = mainObj.total >= 0 ? `$${mainObj.total.toLocaleString()}` : `-$${Math.abs(mainObj.total).toLocaleString()}`;
         let displayLabel = `<span class="cat-emoji" style="width:22px;height:22px;font-size:13px;">${getIcon(mainName, '大分類')}</span> ${mainName}`;
 
-        // 排序並產生小項目 HTML
         let subKeys = Object.keys(mainObj.subs).sort((a, b) => Math.abs(mainObj.subs[b]) - Math.abs(mainObj.subs[a]));
         let subHtml = subKeys.map(subName => {
             let subVal = mainObj.subs[subName];
@@ -862,6 +909,9 @@ window.openChartDetail = function(label) {
     
     let filtered = validExpenseData;
     
+    // 🌟 圖表排除繳卡費
+    filtered = filtered.filter(e => !(e.mainCategory === '信用卡' && e.subCategory === '繳信用卡' && e.type === '支出'));
+
     if (currentChartInOut === '支出') filtered = filtered.filter(e => e.type === '支出');
     else if (currentChartInOut === '收入') filtered = filtered.filter(e => e.type === '收入');
 
@@ -912,7 +962,6 @@ window.openChartDetail = function(label) {
             }
             let projectHtml = e.project ? `<span class="detail-project-tag">★ ${e.project}</span>` : '';
 
-            // 【修改】備註文字無表情符號，並換行顯示
             return `
             <div style="padding:12px 0; border-bottom:1px solid #f0f0f0;">
                 <div style="display:flex; justify-content:space-between; align-items:flex-start;">
@@ -941,159 +990,152 @@ window.openChartDetail = function(label) {
     document.getElementById('page-chart-detail').classList.add('active');
 };
 
-// ==========================================
-// 比較頁面 動態圖表與文字報表邏輯
-// ==========================================
+// 【更新】比較頁面渲染 (排除繳卡費)
 window.renderComparePage = function() {
-    let sYearStr = document.getElementById('compareStartYear').value;
-    let eYearStr = document.getElementById('compareEndYear').value;
+    const baseYearStr = document.getElementById('compareBaseYear').value;
+    const endYearStr = document.getElementById('compareEndYear').value;
     const month = parseInt(document.getElementById('compareMonth').value, 10);
-    
     const summaryContainer = document.getElementById('compareSummaryArea');
     const chartContainer = document.getElementById('compareChartArea');
+    
     if(!summaryContainer || !chartContainer) return;
 
-    let sYear = parseInt(sYearStr, 10);
-    let eYear = parseInt(eYearStr, 10);
-
-    if (isNaN(sYear) || isNaN(eYear)) {
-        let opts = Array.from(document.getElementById('compareStartYear').options);
-        if(opts.length > 0 && opts[0].value !== "") {
-            sYear = parseInt(opts[opts.length > 1 ? opts.length - 2 : 0].value, 10);
-            eYear = parseInt(opts[opts.length - 1].value, 10);
-        } else {
-            chartContainer.innerHTML = '<div style="text-align:center; padding:30px; color:#999;">沒有記帳資料可供比較</div>';
-            summaryContainer.innerHTML = '';
-            return;
-        }
-    }
-
-    const startY = Math.min(sYear, eYear);
-    const endY = Math.max(sYear, eYear);
-    
-    let expenses = validExpenseData.filter(e => e.type === '支出');
-    
+    let xLabels = [];
+    let dataArray = [];
+    let cardTitle = "";
     let datasets = [];
-    let targetTotal = 0; 
-    let prevTotal = 0;   
-    let cardTitle = '';
-    
-    let yearsInRange = [];
-    for(let y = startY; y <= endY; y++) yearsInRange.push(y);
 
-    let xLabels = yearsInRange.map(y => y + '年');
-    let dataArray = new Array(yearsInRange.length).fill(0);
+    // 🌟 核心過濾規則：排除繳卡費的支出
+    let expenses = validExpenseData.filter(e => e.type === '支出' && !(e.mainCategory === '信用卡' && e.subCategory === '繳信用卡'));
 
-    if (compareMode === 'month') {
-        cardTitle = `單月歷史趨勢 (${startY}年~${endY}年 ${month}月)`;
-        expenses.forEach(e => {
-            if(!e.date) return;
-            let p = e.date.split('-');
-            let y = parseInt(p[0], 10);
-            let m = parseInt(p[1], 10);
-            if(y >= startY && y <= endY && m === month) {
-                let yIndex = y - startY;
-                dataArray[yIndex] += Number(e.amount);
-            }
-        });
-        datasets.push({ label: `${month}月總額`, data: dataArray, color: compareColors[1] });
-    } else {
-        cardTitle = `年度歷史趨勢 (${startY}年~${endY}年)`;
-        expenses.forEach(e => {
-            if(!e.date) return;
-            let p = e.date.split('-');
-            let y = parseInt(p[0], 10);
-            if(y >= startY && y <= endY) {
-                let yIndex = y - startY;
-                dataArray[yIndex] += Number(e.amount);
-            }
-        });
-        datasets.push({ label: `年度總額`, data: dataArray, color: compareColors[0] });
-    }
-
-    if (dataArray.length > 0) targetTotal = dataArray[dataArray.length - 1];
-    if (dataArray.length > 1) prevTotal = dataArray[dataArray.length - 2];
-    else prevTotal = 0;
-
-    let maxVal = Math.max(...dataArray);
-    if(maxVal === 0) maxVal = 100;
-
-    const width = chartContainer.clientWidth || 300;
-    const height = 260;
-    const padX = 40;
-    const padY = 40; 
-    const chartW = width - padX * 2;
-    const chartH = height - padY * 2;
-
-    let legendHtml = `<div style="display:flex; justify-content:center; gap:15px; margin-bottom:10px; flex-wrap:wrap;">`;
-    datasets.forEach(ds => {
-        legendHtml += `<div style="display:flex; align-items:center; gap:5px; font-size:13px; font-weight:bold; color:#555;">
-            <div style="width:16px; height:4px; background-color:${ds.color}; border-radius:2px;"></div>
-            ${ds.label}
-        </div>`;
-    });
-    legendHtml += `</div>`;
-
-    let svg = `<svg width="100%" height="${height}">`;
-
-    for(let i=0; i<=4; i++) {
-        let y = padY + chartH - (i/4)*chartH;
-        let val = Math.round((i/4)*maxVal);
-        svg += `<text x="${padX-5}" y="${y+4}" font-size="11" text-anchor="end" fill="#999">${val}</text>`;
-    }
-
-    let step = Math.ceil(xLabels.length / 10); 
-    xLabels.forEach((lbl, i) => {
-        let x = padX + (i / (xLabels.length-1)) * chartW;
-        if(i % step === 0 || i === xLabels.length-1) {
-            svg += `<text x="${x}" y="${height-10}" font-size="11" text-anchor="middle" fill="#999">${lbl}</text>`;
-        }
-    });
-
-    datasets.forEach(ds => {
-        let points = ds.data.map((val, i) => {
-            let x = padX + (i / (xLabels.length-1)) * chartW;
-            let y = padY + chartH - (val/maxVal) * chartH;
-            return `${x},${y}`;
-        }).join(' ');
-        svg += `<polyline points="${points}" fill="none" stroke="${ds.color}" stroke-width="2.5" />`;
+    if (compareMode === 'currentYearMonth') {
+        // 當年月份趨勢 (1-12月單線圖)
+        cardTitle = `${baseYearStr}年 月份支出趨勢`;
+        xLabels = ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"];
+        dataArray = new Array(12).fill(0);
         
-        ds.data.forEach((val, i) => {
-            let x = padX + (i / (xLabels.length-1)) * chartW;
-            let y = padY + chartH - (val/maxVal) * chartH;
-            svg += `<circle cx="${x}" cy="${y}" r="4" fill="white" stroke="${ds.color}" stroke-width="2" />`;
-            
-            if (val >= 0) {
-                svg += `<text x="${x}" y="${y - 12}" font-size="13" text-anchor="middle" fill="#444" font-weight="bold">$${val.toLocaleString()}</text>`;
+        expenses.forEach(e => {
+            if(!e.date) return;
+            let p = e.date.split('-');
+            if(p[0] === baseYearStr) {
+                let mIndex = parseInt(p[1], 10) - 1;
+                dataArray[mIndex] += Number(e.amount);
             }
         });
-    });
-    svg += `</svg>`;
+        datasets.push({ label: '月支出', data: dataArray, color: '#ff9bbb' });
 
-    chartContainer.innerHTML = legendHtml + svg;
+    } else if (compareMode === 'year') {
+        // 年度歷史趨勢
+        let sY = Math.min(parseInt(baseYearStr), parseInt(endYearStr));
+        let eY = Math.max(parseInt(baseYearStr), parseInt(endYearStr));
+        cardTitle = `${sY}年 - ${eY}年 年度總支出`;
+        for(let y = sY; y <= eY; y++) xLabels.push(y + "年");
+        dataArray = new Array(xLabels.length).fill(0);
 
-    let diff = targetTotal - prevTotal;
-    let diffColorClass = diff > 0 ? 'red' : (diff < 0 ? 'green' : 'gray'); 
-    let diffSign = diff > 0 ? '+' : '';
+        expenses.forEach(e => {
+            if(!e.date) return;
+            let y = parseInt(e.date.split('-')[0], 10);
+            if(y >= sY && y <= eY) {
+                dataArray[y - sY] += Number(e.amount);
+            }
+        });
+        datasets.push({ label: '年總額', data: dataArray, color: '#2196F3' });
+
+    } else if (compareMode === 'month') {
+        // 單月歷史趨勢
+        cardTitle = `歷年 ${month}月 支出比較`;
+        let uniqueYears = Array.from(new Set(validExpenseData.map(e => e.date.split('-')[0]))).sort();
+        xLabels = uniqueYears.map(y => y + "年");
+        dataArray = new Array(xLabels.length).fill(0);
+
+        expenses.forEach(e => {
+            if(!e.date) return;
+            let p = e.date.split('-');
+            let y = p[0];
+            let m = parseInt(p[1], 10);
+            if(m === month) {
+                let yIndex = uniqueYears.indexOf(y);
+                if(yIndex !== -1) dataArray[yIndex] += Number(e.amount);
+            }
+        });
+        datasets.push({ label: `${month}月額`, data: dataArray, color: '#4CAF50' });
+    }
+
+    // 繪製 SVG 圖表
+    renderSvgChart(chartContainer, xLabels, datasets);
+
+    // 下方統計數字
+    let total = dataArray.reduce((a, b) => a + b, 0);
+    let avg = Math.round(total / (dataArray.filter(v => v > 0).length || 1));
     
-    let targetYearStr = `${endY}年`;
-    let prevYearStr = yearsInRange.length > 1 ? `${endY-1}年` : '無資料';
-    let prevValStr = yearsInRange.length > 1 ? `$${prevTotal.toLocaleString()}` : '$0';
-
     summaryContainer.innerHTML = `
         <div class="compare-card">
             <div class="compare-card-title">${cardTitle}</div>
             <div class="compare-row main">
-                <span class="compare-label">${targetYearStr}</span>
-                <span class="compare-val-main">$${targetTotal.toLocaleString()}</span>
+                <span class="compare-label">總計支出</span>
+                <span class="compare-val-main">$${total.toLocaleString()}</span>
             </div>
             <div class="compare-row">
-                <span class="compare-sub-label">${prevYearStr}: ${prevValStr}</span>
-                <span class="compare-diff ${diffColorClass}">差異: ${diffSign}$${diff.toLocaleString()}</span>
+                <span class="compare-sub-label">平均每月支出 (有紀錄月份)</span>
+                <span class="compare-diff gray">$${avg.toLocaleString()}</span>
             </div>
         </div>
     `;
 };
+
+// 抽離 SVG 繪圖逻辑以保持程式碼整潔
+function renderSvgChart(container, xLabels, datasets) {
+    const width = container.clientWidth || 300;
+    const height = 240;
+    const padX = 45;
+    const padY = 30;
+    const chartW = width - padX * 2;
+    const chartH = height - padY * 2;
+
+    let maxVal = Math.max(...datasets[0].data, 100);
+    let svg = `<svg width="100%" height="${height}">`;
+
+    // 網格線與標籤
+    for(let i=0; i<=4; i++) {
+        let y = padY + chartH - (i/4)*chartH;
+        let val = Math.round((i/4)*maxVal);
+        svg += `<line x1="${padX}" y1="${y}" x2="${width-padX}" y2="${y}" stroke="#eee" />`;
+        svg += `<text x="${padX-5}" y="${y+4}" font-size="10" text-anchor="end" fill="#999">${val}</text>`;
+    }
+
+    // 橫軸標籤
+    let step = Math.ceil(xLabels.length / 6);
+    xLabels.forEach((lbl, i) => {
+        let x = padX + (i / (xLabels.length - 1)) * chartW;
+        if(i % step === 0 || i === xLabels.length - 1) {
+            svg += `<text x="${x}" y="${height-5}" font-size="10" text-anchor="middle" fill="#999">${lbl}</text>`;
+        }
+    });
+
+    // 繪製線條
+    datasets.forEach(ds => {
+        let points = ds.data.map((val, i) => {
+            let x = padX + (i / (xLabels.length - 1)) * chartW;
+            let y = padY + chartH - (val/maxVal) * chartH;
+            return `${x},${y}`;
+        }).join(' ');
+        
+        svg += `<polyline points="${points}" fill="none" stroke="${ds.color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />`;
+        
+        ds.data.forEach((val, i) => {
+            if(val === 0 && ds.data.length > 12) return; // 歷史趨勢不標 0
+            let x = padX + (i / (xLabels.length - 1)) * chartW;
+            let y = padY + chartH - (val/maxVal) * chartH;
+            svg += `<circle cx="${x}" cy="${y}" r="4" fill="white" stroke="${ds.color}" stroke-width="2" />`;
+            if(datasets[0].data.length <= 12) { // 點少時才顯示數字
+                svg += `<text x="${x}" y="${y-10}" font-size="10" text-anchor="middle" font-weight="bold" fill="#333">$${val.toLocaleString()}</text>`;
+            }
+        });
+    });
+
+    svg += `</svg>`;
+    container.innerHTML = svg;
+}
 
 window.editExpense = function(id) {
     let exp = validExpenseData.find(e => e.id.toString() === id.toString()) || exceptionExpenseData.find(e => e.id.toString() === id.toString());
@@ -1104,6 +1146,7 @@ window.editExpense = function(id) {
     document.getElementById('date').value = exp.date; 
     document.querySelector('select[name="type"]').value = exp.type === '收入' ? 'income' : 'expense';
     document.querySelector('input[name="amount"]').value = exp.amount;
+    document.getElementById('payMethod').value = exp.payMethod || '存款'; // 讀取付款方式
     document.querySelector('input[name="content"]').value = exp.content || '';
 
     let userSel = document.getElementById('user');
@@ -1149,7 +1192,6 @@ window.deleteExpense = function(id) {
         .then(r => r.json()).then(res => { if(res.status === 'success') fetchData(); });
 };
 
-// 【修復】強制從 input 讀取明確的 operation 值，杜絕產生兩筆資料的可能
 document.getElementById('expenseForm').onsubmit = function(e) {
     e.preventDefault();
     const btn = document.getElementById('submitBtn');
@@ -1251,4 +1293,132 @@ document.getElementById('manageItemForm').onsubmit = function(e) {
         })
         .catch(err => { alert('網路錯誤或伺服器無回應'); })
         .finally(() => { btn.innerText = '儲存'; btn.disabled = false; });
+};
+
+// ==========================================
+// 存款與信用卡 結算與校正系統
+// ==========================================
+
+window.getUserBalance = function(userName) {
+    let deposit = 0;
+    let credit = 0;
+    
+    validExpenseData.forEach(e => {
+        if (e.user === userName) {
+            let amt = Number(e.amount) || 0;
+            let method = e.payMethod || '存款';
+
+            if (method === '存款') {
+                if (e.type === '收入') deposit += amt;
+                else if (e.type === '支出') {
+                    deposit -= amt;
+                    // 如果是用存款繳信用卡，存款減少，但信用卡的可用額度恢復
+                    if (e.mainCategory === '信用卡' && e.subCategory === '繳信用卡') {
+                        credit += amt; 
+                    }
+                }
+            } else if (method === '信用卡') {
+                if (e.type === '收入') credit += amt; // 例如信用卡退款
+                else if (e.type === '支出') credit -= amt; // 刷卡扣可用額度
+            }
+        }
+    });
+    return { deposit, credit };
+};
+
+let currentAdjustUser = '';
+let currentSysBalances = { deposit: 0, credit: 0 };
+
+window.openAdjustBalanceModal = function(userName) {
+    currentAdjustUser = userName;
+    currentSysBalances = getUserBalance(userName);
+    
+    document.getElementById('adjUserName').innerText = userName;
+    document.getElementById('adjAccountType').value = '存款'; // 預設打開校正存款
+    
+    updateAdjustDisplay();
+    document.getElementById('adjustBalanceModal').style.display = 'flex';
+};
+
+// 即時切換校正的顯示畫面
+window.updateAdjustDisplay = function() {
+    let type = document.getElementById('adjAccountType').value;
+    let sysBal = type === '存款' ? currentSysBalances.deposit : currentSysBalances.credit;
+    
+    document.getElementById('adjSysBalance').innerText = sysBal.toLocaleString();
+    document.getElementById('adjActualBalance').value = sysBal;
+    document.getElementById('adjDiffDisplay').innerText = '差額: $0 (無需調整)';
+};
+
+// 監聽輸入框計算差額
+document.addEventListener('DOMContentLoaded', () => {
+    const adjInput = document.getElementById('adjActualBalance');
+    if(adjInput) {
+        adjInput.addEventListener('input', function() {
+            let actual = Number(this.value) || 0;
+            let type = document.getElementById('adjAccountType').value;
+            let sysBal = type === '存款' ? currentSysBalances.deposit : currentSysBalances.credit;
+            
+            let diff = actual - sysBal;
+            let display = document.getElementById('adjDiffDisplay');
+            if (diff > 0) {
+                display.innerHTML = `差額: <span style="color:#4CAF50;">+$${diff.toLocaleString()} (系統少算，將新增一筆異常收入)</span>`;
+            } else if (diff < 0) {
+                display.innerHTML = `差額: <span style="color:#ef5350;">-$${Math.abs(diff).toLocaleString()} (系統多算，將新增一筆異常支出)</span>`;
+            } else {
+                display.innerHTML = `差額: $0 (無需調整)`;
+            }
+        });
+    }
+});
+
+// 送出校正
+window.submitBalanceAdjustment = function() {
+    let actual = Number(document.getElementById('adjActualBalance').value) || 0;
+    let type = document.getElementById('adjAccountType').value;
+    let sysBal = type === '存款' ? currentSysBalances.deposit : currentSysBalances.credit;
+    
+    let diff = actual - sysBal;
+    
+    if (diff === 0) {
+        document.getElementById('adjustBalanceModal').style.display = 'none';
+        return;
+    }
+
+    const btn = document.getElementById('adjSubmitBtn');
+    btn.innerText = '處理中...'; btn.disabled = true;
+
+    const ledger = document.getElementById('globalLedgerSelect') ? document.getElementById('globalLedgerSelect').value : '日常帳本';
+    
+    // 強制進入異常：選擇一個不存在的分類
+    const data = {
+        action: 'expense',
+        operation: 'add',
+        id: Date.now(),
+        date: formatDate(new Date()),
+        type: diff > 0 ? 'income' : 'expense',
+        amount: Math.abs(diff),
+        payMethod: type, // 紀錄這是修改存款還是信用卡
+        user: currentAdjustUser,
+        targetUser: currentAdjustUser,
+        mainCategory: `未選擇大項目(${type}校正)`, 
+        subCategory: '未選擇小項目',
+        project: '',
+        content: `手動${type}校正差額`,
+        ledgerName: ledger
+    };
+
+    fetch(SCRIPT_URL, { method: 'POST', body: JSON.stringify(data) })
+        .then(res => res.json())
+        .then(res => {
+            if(res.status === 'success') {
+                alert(`已將${type}差額新增至「異常」明細！\n請前往異常分頁補齊分類。`);
+                document.getElementById('adjustBalanceModal').style.display = 'none';
+                fetchData(); 
+            } else {
+                alert('校正失敗：' + res.message);
+            }
+        })
+        .catch(err => { alert('網路錯誤或伺服器無回應'); })
+        .finally(() => { btn.innerText = '確認新增差額'; btn.disabled = false; });
 };
