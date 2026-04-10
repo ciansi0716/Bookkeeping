@@ -79,19 +79,19 @@
 
     <div id="page-manage" class="page">
       <div class="manage-tabs">
-        <div class="tab-item active" data-target="manage-content-ledgers">帳本</div>
-        <div class="tab-item" data-target="manage-content-users">使用者</div>
+        <div class="tab-item active" data-target="manage-content-users">使用者</div>
+        <div class="tab-item" data-target="manage-content-ledgers">帳本</div>
         <div class="tab-item" data-target="manage-content-categories">分類</div>
         <div class="tab-item" data-target="manage-content-projects">專案</div>
       </div>
       <div class="manage-content-container">
-        <div id="manage-content-ledgers" class="manage-content active">
-          <div class="section-header"><span>帳本列表</span><button class="add-item-btn-small" onclick="openManageModal('add', '帳本')">+</button></div>
-          <ul id="ledgerList" class="manage-list-v2"></ul>
-        </div>
-        <div id="manage-content-users" class="manage-content">
+        <div id="manage-content-users" class="manage-content active">
           <div class="section-header"><span>使用者列表</span><button class="add-item-btn-small" onclick="openManageModal('add', '使用者')">+</button></div>
           <ul id="userList" class="manage-list-v2"></ul>
+        </div>
+        <div id="manage-content-ledgers" class="manage-content">
+          <div class="section-header"><span>帳本列表</span><button class="add-item-btn-small" onclick="openManageModal('add', '帳本')">+</button></div>
+          <ul id="ledgerList" class="manage-list-v2"></ul>
         </div>
         <div id="manage-content-categories" class="manage-content">
           <div class="section-header"><span>大分類 (內含小分類)</span><button class="add-item-btn-small" onclick="openManageModal('add', '大分類')">+</button></div>
