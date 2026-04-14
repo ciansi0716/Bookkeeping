@@ -15,6 +15,8 @@ let compareMode = 'currentYearMonth';
 let compareSelectedPeriods = [];
 const compareColors = ['#F44336', '#2196F3', '#4CAF50', '#FF9800', '#9C27B0'];
 
+let isGroupedView = false; // 追蹤合併狀態
+
 document.addEventListener('DOMContentLoaded', function() {
     initUI();
     initDateSelects(); 
@@ -123,7 +125,13 @@ function initUI() {
             document.getElementById('headerTitle').innerText = titleMap[target] || '';
             
             if(target === 'page-charts') renderChart();
-            if(target === 'page-manage') renderManageLists();
+            if(target === 'page-manage') {
+                document.querySelectorAll('.manage-tabs .tab-item').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.manage-content').forEach(c => c.classList.remove('active'));
+                document.querySelector('.manage-tabs .tab-item[data-target="manage-content-users"]').classList.add('active');
+                document.getElementById('manage-content-users').classList.add('active');
+                renderManageLists();
+            }
             if(target === 'page-exceptions') renderExceptionList();
             if(target === 'page-compare') {
                 initCompareDropdowns();
@@ -267,10 +275,8 @@ function initCompareDropdowns() {
     baseYear.innerHTML = yHtml;
     endYear.innerHTML = yHtml;
 
-    // 預設為最新年份
     baseYear.value = uniqueYears[uniqueYears.length - 1];
     
-    // 如果有兩年以上，結束年份預設為倒數第二年（用作範圍）
     if (uniqueYears.length > 1) {
         endYear.value = uniqueYears[uniqueYears.length - 2];
     } else {
@@ -375,12 +381,20 @@ function fetchData() {
         appData['小分類'] = (res.manageData || []).filter(d => d.type === '小分類');
         appData['專案'] = (res.manageData || []).filter(d => d.type === '專案'); 
         
-        // 🌟 自動注入信用卡預設分類 (如果不存在)
+        // 🌟 自動注入信用卡預設分類
         if (!appData['大分類'].find(c => c.name === '信用卡')) {
             appData['大分類'].push({ id: 'cc_main', name: '信用卡', parentName: '', icon: '💳', color: '' });
         }
         if (!appData['小分類'].find(c => c.name === '繳信用卡')) {
             appData['小分類'].push({ id: 'cc_sub', name: '繳信用卡', parentName: '信用卡', icon: '💳', color: '' });
+        }
+
+        // 🌟 自動注入轉帳預設分類
+        if (!appData['大分類'].find(c => c.name === '轉帳')) {
+            appData['大分類'].push({ id: 'transfer_main', name: '轉帳', parentName: '', icon: '🔄', color: '' });
+        }
+        if (!appData['小分類'].find(c => c.name === '轉帳')) {
+            appData['小分類'].push({ id: 'transfer_sub', name: '轉帳', parentName: '轉帳', icon: '💸', color: '' });
         }
 
         validExpenseData = [];
@@ -420,6 +434,23 @@ function fetchData() {
     }).catch(err => console.log("背景抓取失敗"));
 }
 
+window.toggleGroupView = function() {
+    isGroupedView = !isGroupedView;
+    const btn = document.getElementById('toggleGroupBtn');
+    if (isGroupedView) {
+        btn.innerText = '取消合併';
+        btn.style.background = '#ffe0b2';
+        btn.style.color = '#e65100';
+        btn.style.borderColor = '#ffcc80';
+    } else {
+        btn.innerText = '合併同項';
+        btn.style.background = '#e3f2fd';
+        btn.style.color = '#1565c0';
+        btn.style.borderColor = '#bbdefb';
+    }
+    renderDailyList();
+};
+
 window.renderDailyList = function() {
     const list = document.getElementById('expenseList');
     document.getElementById('dailyDetailTitle').innerText = `${selectedDateStr} 明細`;
@@ -433,23 +464,56 @@ window.renderDailyList = function() {
     
     let dailyIncome = 0;
     let dailyExpense = 0;
+
+    // 🌟 合併邏輯運算
+    let displayData = dailyData;
+    if (isGroupedView) {
+        let grouped = {};
+        dailyData.forEach(e => {
+            // 將除了金額、ID、備註以外的所有屬性組成唯一 Key
+            let key = `${e.type}_${e.mainCategory}_${e.subCategory}_${e.user}_${e.targetUser}_${e.project}_${e.payMethod}`;
+            if (!grouped[key]) {
+                grouped[key] = { ...e, amount: 0, count: 0, contents: [] };
+            }
+            grouped[key].amount += Number(e.amount);
+            grouped[key].count += 1;
+            if (e.content && e.content.trim() !== '') grouped[key].contents.push(e.content);
+        });
+        
+        displayData = Object.values(grouped).map(g => {
+            let combinedContent = g.contents.join(' / ');
+            return {
+                ...g,
+                content: g.count > 1 
+                    ? `<span style="color:#e65100; font-weight:bold;">(合併 ${g.count} 筆)</span> ${combinedContent}`
+                    : g.content,
+                isGrouped: g.count > 1 // 標記為已被合併的資料
+            };
+        });
+    }
     
-    let listHTML = dailyData.map(e => {
+    let listHTML = displayData.map(e => {
         const amt = Number(e.amount) || 0;
         
-        // 🌟 核心過濾規則：只有當 大項目=信用卡 且 小項目=繳信用卡 且 是支出時，才不計入每日淨收支
         let isPayingCreditCardBill = (e.mainCategory === '信用卡' && e.subCategory === '繳信用卡' && e.type === '支出');
+        let isTransfer = (e.mainCategory === '轉帳'); 
         
-        if (!isPayingCreditCardBill) {
+        // 排除轉帳與繳卡費進入每日淨額計算
+        if (!isPayingCreditCardBill && !isTransfer) {
             if(e.type === '支出') dailyExpense += amt;
             else if(e.type === '收入') dailyIncome += amt; 
         }
         
-        const color = e.type === '收入' ? '#4CAF50' : '#ef5350';
-        const sign = e.type === '收入' ? '+' : '-';
+        let color = e.type === '收入' ? '#4CAF50' : '#ef5350';
+        let sign = e.type === '收入' ? '+' : '-';
+        if (isTransfer) {
+            color = '#8e24aa'; 
+            sign = '';
+        }
+
         const emoji = getIcon(e.mainCategory, '大分類');
-        
         const userStyle = getUserColorStyle(e.user); 
+        
         let targetHtml = '';
         let tUser = e.targetUser || e.user;
         if (tUser !== e.user) {
@@ -458,7 +522,24 @@ window.renderDailyList = function() {
         }
 
         let projectHtml = e.project ? `<span class="detail-project-tag">★ ${e.project}</span>` : '';
-        let payBadge = e.payMethod === '信用卡' ? `<span class="detail-project-tag" style="background:#e3f2fd; color:#1565c0; border-color:#bbdefb;">信用卡</span>` : `<span class="detail-project-tag" style="background:#e8f5e9; color:#2e7d32; border-color:#c8e6c9;">存款</span>`;
+        
+        let payBadge = '';
+        if (isTransfer) {
+            payBadge = `<span class="detail-project-tag" style="background:#f3e5f5; color:#7b1fa2; border-color:#e1bee7;">🔄 內部轉帳</span>`;
+        } else {
+            payBadge = e.payMethod === '信用卡' ? `<span class="detail-project-tag" style="background:#e3f2fd; color:#1565c0; border-color:#bbdefb;">💳 信用卡</span>` : `<span class="detail-project-tag" style="background:#e8f5e9; color:#2e7d32; border-color:#c8e6c9;">💵 存款</span>`;
+        }
+
+        // 🌟 防呆設計：如果是合併的項目，隱藏編輯與刪除按鈕
+        let actionsHtml = '';
+        if (e.isGrouped) {
+            actionsHtml = `<span style="font-size:12px; color:#999; margin-right:5px; font-weight:bold;">取消合併以編輯</span>`;
+        } else {
+            actionsHtml = `
+                <button class="icon-btn-gray" style="font-size:13px; background:#f5f5f5; padding:4px 8px; border-radius:4px;" onclick="editExpense('${e.id}')">✎</button>
+                <button class="icon-btn-red" style="font-size:13px; background:#ffebee; padding:4px 8px; border-radius:4px;" onclick="deleteExpense('${e.id}')">✕</button>
+            `;
+        }
 
         return `
         <div style="padding:12px 0; border-bottom:1px solid #f0f0f0;">
@@ -476,9 +557,8 @@ window.renderDailyList = function() {
                 </div>
                 <div style="text-align:right;">
                     <div style="color:${color}; font-weight:bold; font-size:16px; margin-bottom:4px;">${sign}$${amt}</div>
-                    <div style="display:flex; gap:8px; justify-content:flex-end;">
-                        <button class="icon-btn-gray" style="font-size:13px; background:#f5f5f5; padding:4px 8px; border-radius:4px;" onclick="editExpense('${e.id}')">✎</button>
-                        <button class="icon-btn-red" style="font-size:13px; background:#ffebee; padding:4px 8px; border-radius:4px;" onclick="deleteExpense('${e.id}')">✕</button>
+                    <div style="display:flex; gap:8px; justify-content:flex-end; align-items:center;">
+                        ${actionsHtml}
                     </div>
                 </div>
             </div>
@@ -492,11 +572,11 @@ window.renderDailyList = function() {
 
     const summaryHTML = `
         <div style="background:${netBg}; padding:10px; border-radius:6px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; font-weight:bold; color:${netColor};">
-            <span>本日淨收支 (已排除繳卡費)</span>
+            <span>本日淨收支 (不含轉帳/繳卡)</span>
             <span style="font-size:18px;">${netSign}$${Math.abs(netAmount).toLocaleString()}</span>
         </div>`;
     list.innerHTML = summaryHTML + listHTML;
-}
+};
 
 window.renderExceptionList = function() {
     const list = document.getElementById('exceptionList');
@@ -597,7 +677,7 @@ window.renderManageLists = function() {
         
         let userHtml = appData['使用者'].map(item => {
             const c = item.color || '#1976d2';
-            const balances = getUserBalance(item.name); // 取得存款與信用卡餘額
+            const balances = getUserBalance(item.name); 
             totalAllDeposit += balances.deposit; 
             totalAllCredit += balances.credit;
             
@@ -621,7 +701,6 @@ window.renderManageLists = function() {
             </li>`;
         }).join('');
         
-        // 頂部總存款面板
         let totalHtml = `
         <div style="background:#e3f2fd; border:1px solid #bbdefb; padding:12px; border-radius:8px; margin-bottom:15px; display:flex; justify-content:space-around; align-items:center;">
             <div style="text-align:center;">
@@ -751,7 +830,6 @@ function updateFormSubCategory() {
     }
 }
 
-// 【更新】統計圖表渲染 (排除繳卡費)
 window.renderChart = function() {
     const container = document.getElementById('customChartBars');
     const inOutSel = document.getElementById('chartInOutSelect');
@@ -774,8 +852,8 @@ window.renderChart = function() {
     
     let filtered = validExpenseData;
     
-    // 🌟 核心過濾規則：排除大項目為「信用卡」且小項目為「繳信用卡」的支出
     filtered = filtered.filter(e => !(e.mainCategory === '信用卡' && e.subCategory === '繳信用卡' && e.type === '支出'));
+    filtered = filtered.filter(e => e.mainCategory !== '轉帳');
 
     if (currentChartInOut === '支出') filtered = filtered.filter(e => e.type === '支出');
     else if (currentChartInOut === '收入') filtered = filtered.filter(e => e.type === '收入');
@@ -909,8 +987,8 @@ window.openChartDetail = function(label) {
     
     let filtered = validExpenseData;
     
-    // 🌟 圖表排除繳卡費
     filtered = filtered.filter(e => !(e.mainCategory === '信用卡' && e.subCategory === '繳信用卡' && e.type === '支出'));
+    filtered = filtered.filter(e => e.mainCategory !== '轉帳');
 
     if (currentChartInOut === '支出') filtered = filtered.filter(e => e.type === '支出');
     else if (currentChartInOut === '收入') filtered = filtered.filter(e => e.type === '收入');
@@ -990,7 +1068,6 @@ window.openChartDetail = function(label) {
     document.getElementById('page-chart-detail').classList.add('active');
 };
 
-// 【更新】比較頁面渲染 (排除繳卡費)
 window.renderComparePage = function() {
     const baseYearStr = document.getElementById('compareBaseYear').value;
     const endYearStr = document.getElementById('compareEndYear').value;
@@ -1005,11 +1082,13 @@ window.renderComparePage = function() {
     let cardTitle = "";
     let datasets = [];
 
-    // 🌟 核心過濾規則：排除繳卡費的支出
-    let expenses = validExpenseData.filter(e => e.type === '支出' && !(e.mainCategory === '信用卡' && e.subCategory === '繳信用卡'));
+    let expenses = validExpenseData.filter(e => 
+        e.type === '支出' && 
+        !(e.mainCategory === '信用卡' && e.subCategory === '繳信用卡') && 
+        e.mainCategory !== '轉帳'
+    );
 
     if (compareMode === 'currentYearMonth') {
-        // 當年月份趨勢 (1-12月單線圖)
         cardTitle = `${baseYearStr}年 月份支出趨勢`;
         xLabels = ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"];
         dataArray = new Array(12).fill(0);
@@ -1025,7 +1104,6 @@ window.renderComparePage = function() {
         datasets.push({ label: '月支出', data: dataArray, color: '#ff9bbb' });
 
     } else if (compareMode === 'year') {
-        // 年度歷史趨勢
         let sY = Math.min(parseInt(baseYearStr), parseInt(endYearStr));
         let eY = Math.max(parseInt(baseYearStr), parseInt(endYearStr));
         cardTitle = `${sY}年 - ${eY}年 年度總支出`;
@@ -1042,7 +1120,6 @@ window.renderComparePage = function() {
         datasets.push({ label: '年總額', data: dataArray, color: '#2196F3' });
 
     } else if (compareMode === 'month') {
-        // 單月歷史趨勢
         cardTitle = `歷年 ${month}月 支出比較`;
         let uniqueYears = Array.from(new Set(validExpenseData.map(e => e.date.split('-')[0]))).sort();
         xLabels = uniqueYears.map(y => y + "年");
@@ -1061,10 +1138,8 @@ window.renderComparePage = function() {
         datasets.push({ label: `${month}月額`, data: dataArray, color: '#4CAF50' });
     }
 
-    // 繪製 SVG 圖表
     renderSvgChart(chartContainer, xLabels, datasets);
 
-    // 下方統計數字
     let total = dataArray.reduce((a, b) => a + b, 0);
     let avg = Math.round(total / (dataArray.filter(v => v > 0).length || 1));
     
@@ -1083,7 +1158,6 @@ window.renderComparePage = function() {
     `;
 };
 
-// 抽離 SVG 繪圖逻辑以保持程式碼整潔
 function renderSvgChart(container, xLabels, datasets) {
     const width = container.clientWidth || 300;
     const height = 240;
@@ -1095,7 +1169,6 @@ function renderSvgChart(container, xLabels, datasets) {
     let maxVal = Math.max(...datasets[0].data, 100);
     let svg = `<svg width="100%" height="${height}">`;
 
-    // 網格線與標籤
     for(let i=0; i<=4; i++) {
         let y = padY + chartH - (i/4)*chartH;
         let val = Math.round((i/4)*maxVal);
@@ -1103,7 +1176,6 @@ function renderSvgChart(container, xLabels, datasets) {
         svg += `<text x="${padX-5}" y="${y+4}" font-size="10" text-anchor="end" fill="#999">${val}</text>`;
     }
 
-    // 橫軸標籤
     let step = Math.ceil(xLabels.length / 6);
     xLabels.forEach((lbl, i) => {
         let x = padX + (i / (xLabels.length - 1)) * chartW;
@@ -1112,7 +1184,6 @@ function renderSvgChart(container, xLabels, datasets) {
         }
     });
 
-    // 繪製線條
     datasets.forEach(ds => {
         let points = ds.data.map((val, i) => {
             let x = padX + (i / (xLabels.length - 1)) * chartW;
@@ -1123,11 +1194,11 @@ function renderSvgChart(container, xLabels, datasets) {
         svg += `<polyline points="${points}" fill="none" stroke="${ds.color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />`;
         
         ds.data.forEach((val, i) => {
-            if(val === 0 && ds.data.length > 12) return; // 歷史趨勢不標 0
+            if(val === 0 && ds.data.length > 12) return; 
             let x = padX + (i / (xLabels.length - 1)) * chartW;
             let y = padY + chartH - (val/maxVal) * chartH;
             svg += `<circle cx="${x}" cy="${y}" r="4" fill="white" stroke="${ds.color}" stroke-width="2" />`;
-            if(datasets[0].data.length <= 12) { // 點少時才顯示數字
+            if(datasets[0].data.length <= 12) { 
                 svg += `<text x="${x}" y="${y-10}" font-size="10" text-anchor="middle" font-weight="bold" fill="#333">$${val.toLocaleString()}</text>`;
             }
         });
@@ -1146,7 +1217,7 @@ window.editExpense = function(id) {
     document.getElementById('date').value = exp.date; 
     document.querySelector('select[name="type"]').value = exp.type === '收入' ? 'income' : 'expense';
     document.querySelector('input[name="amount"]').value = exp.amount;
-    document.getElementById('payMethod').value = exp.payMethod || '存款'; // 讀取付款方式
+    document.getElementById('payMethod').value = exp.payMethod || '存款'; 
     document.querySelector('input[name="content"]').value = exp.content || '';
 
     let userSel = document.getElementById('user');
@@ -1304,22 +1375,27 @@ window.getUserBalance = function(userName) {
     let credit = 0;
     
     validExpenseData.forEach(e => {
-        if (e.user === userName) {
-            let amt = Number(e.amount) || 0;
-            let method = e.payMethod || '存款';
+        let amt = Number(e.amount) || 0;
+        let method = e.payMethod || '存款';
+        let isTransfer = (e.mainCategory === '轉帳'); 
 
-            if (method === '存款') {
-                if (e.type === '收入') deposit += amt;
-                else if (e.type === '支出') {
-                    deposit -= amt;
-                    // 如果是用存款繳信用卡，存款減少，但信用卡的可用額度恢復
-                    if (e.mainCategory === '信用卡' && e.subCategory === '繳信用卡') {
-                        credit += amt; 
+        if (isTransfer) {
+            if (e.user === userName) deposit -= amt;
+            if (e.targetUser === userName && e.targetUser !== e.user) deposit += amt;
+        } else {
+            if (e.user === userName) {
+                if (method === '存款') {
+                    if (e.type === '收入') deposit += amt;
+                    else if (e.type === '支出') {
+                        deposit -= amt;
+                        if (e.mainCategory === '信用卡' && e.subCategory === '繳信用卡') {
+                            credit += amt; 
+                        }
                     }
+                } else if (method === '信用卡') {
+                    if (e.type === '收入') credit += amt; 
+                    else if (e.type === '支出') credit -= amt; 
                 }
-            } else if (method === '信用卡') {
-                if (e.type === '收入') credit += amt; // 例如信用卡退款
-                else if (e.type === '支出') credit -= amt; // 刷卡扣可用額度
             }
         }
     });
@@ -1334,13 +1410,12 @@ window.openAdjustBalanceModal = function(userName) {
     currentSysBalances = getUserBalance(userName);
     
     document.getElementById('adjUserName').innerText = userName;
-    document.getElementById('adjAccountType').value = '存款'; // 預設打開校正存款
+    document.getElementById('adjAccountType').value = '存款'; 
     
     updateAdjustDisplay();
     document.getElementById('adjustBalanceModal').style.display = 'flex';
 };
 
-// 即時切換校正的顯示畫面
 window.updateAdjustDisplay = function() {
     let type = document.getElementById('adjAccountType').value;
     let sysBal = type === '存款' ? currentSysBalances.deposit : currentSysBalances.credit;
@@ -1350,7 +1425,6 @@ window.updateAdjustDisplay = function() {
     document.getElementById('adjDiffDisplay').innerText = '差額: $0 (無需調整)';
 };
 
-// 監聽輸入框計算差額
 document.addEventListener('DOMContentLoaded', () => {
     const adjInput = document.getElementById('adjActualBalance');
     if(adjInput) {
@@ -1372,7 +1446,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
-// 送出校正
 window.submitBalanceAdjustment = function() {
     let actual = Number(document.getElementById('adjActualBalance').value) || 0;
     let type = document.getElementById('adjAccountType').value;
@@ -1390,7 +1463,6 @@ window.submitBalanceAdjustment = function() {
 
     const ledger = document.getElementById('globalLedgerSelect') ? document.getElementById('globalLedgerSelect').value : '日常帳本';
     
-    // 強制進入異常：選擇一個不存在的分類
     const data = {
         action: 'expense',
         operation: 'add',
@@ -1398,7 +1470,7 @@ window.submitBalanceAdjustment = function() {
         date: formatDate(new Date()),
         type: diff > 0 ? 'income' : 'expense',
         amount: Math.abs(diff),
-        payMethod: type, // 紀錄這是修改存款還是信用卡
+        payMethod: type, 
         user: currentAdjustUser,
         targetUser: currentAdjustUser,
         mainCategory: `未選擇大項目(${type}校正)`, 

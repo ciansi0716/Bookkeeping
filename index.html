@@ -27,7 +27,10 @@
       </div>
       <div class="list-section">
         <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 10px;">
-          <h3 class="section-title" id="dailyDetailTitle" style="border: none; padding: 0; margin: 0;">本日明細</h3>
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <h3 class="section-title" id="dailyDetailTitle" style="border: none; padding: 0; margin: 0;">本日明細</h3>
+            <button id="toggleGroupBtn" onclick="toggleGroupView()" style="font-size: 12px; background: #e3f2fd; color: #1565c0; border: 1px solid #bbdefb; padding: 3px 8px; border-radius: 12px; cursor: pointer; font-weight: bold;">合併同項</button>
+          </div>
           <button class="add-item-btn-small" id="fabAddBtn">+</button>
         </div>
         <div id="expenseList" class="expense-list"><div class="empty-state">載入中...</div></div>
@@ -62,7 +65,6 @@
         
         <div class="chart-filter-row" style="margin-bottom:5px; justify-content:center; align-items:center; gap:8px;">
           <select id="compareBaseYear" style="flex:1;"></select>
-          
           <span id="compareRangeLabel" style="font-weight:bold; color:#888; display:none;">至</span>
           <select id="compareEndYear" style="flex:1; display:none;"></select>
           <select id="compareMonth" style="flex:1; display:none;">
