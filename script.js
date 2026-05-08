@@ -64,6 +64,10 @@ function getIcon(categoryName, type) {
     return '📁';
 }
 
+function isCheckoutRecord(e) {
+    return String(e.mainCategory || '').includes('結帳') || String(e.subCategory || '').includes('結帳');
+}
+
 function renderCalendar() {
     const grid = document.getElementById('calendarGrid');
     if(!grid) return;
@@ -165,6 +169,16 @@ function initUI() {
     const userSel = document.getElementById('chartUserSelect');
     const targetUserSel = document.getElementById('chartTargetUserSelect');
     const projectSel = document.getElementById('chartProjectSelect');
+    const chartShowCheckout = document.getElementById('chartShowCheckout');
+
+    // 圖表結帳開關記憶
+    if(chartShowCheckout) {
+        chartShowCheckout.checked = localStorage.getItem('chartShowCheckout') === 'true';
+        chartShowCheckout.addEventListener('change', function() {
+            localStorage.setItem('chartShowCheckout', this.checked);
+            renderChart();
+        });
+    }
 
     [inOutSel, userSel, targetUserSel, monthSel, projectSel].forEach(el => {
         if(el) el.addEventListener('change', renderChart);
@@ -196,6 +210,16 @@ function initUI() {
     const compEndYear = document.getElementById('compareEndYear');
     const compRangeLabel = document.getElementById('compareRangeLabel');
     const compMonth = document.getElementById('compareMonth');
+    const compareShowCheckout = document.getElementById('compareShowCheckout');
+
+    // 比較頁結帳開關記憶
+    if(compareShowCheckout) {
+        compareShowCheckout.checked = localStorage.getItem('compareShowCheckout') === 'true';
+        compareShowCheckout.addEventListener('change', function() {
+            localStorage.setItem('compareShowCheckout', this.checked);
+            renderComparePage();
+        });
+    }
 
     if(compModeSel) {
         compModeSel.addEventListener('change', () => {
@@ -222,7 +246,7 @@ function initUI() {
         document.getElementById('expenseOperation').value = 'add';
         document.getElementById('submitBtn').innerText = '儲存新增';
         document.getElementById('date').value = selectedDateStr; 
-        document.getElementById('payMethod').value = '存款'; // 預設為存款
+        document.getElementById('payMethod').value = '存款'; 
         updateFormDropdowns();
         document.getElementById('addModal').style.display = 'flex';
     };
@@ -266,7 +290,7 @@ function initCompareDropdowns() {
 
     let uniqueYears = Array.from(new Set(validExpenseData.map(e => {
         if(!e.date) return null;
-        return e.date.split('-')[0];
+        return String(e.date).split('-')[0];
     }).filter(Boolean))).sort();
     
     if(uniqueYears.length === 0) uniqueYears = [new Date().getFullYear().toString()];
@@ -316,7 +340,7 @@ function updateChartDropdowns() {
 
     let uniqueYears = new Set();
     validExpenseData.forEach(e => {
-        if(e.date) { let parts = e.date.split('-'); if(parts.length > 0) uniqueYears.add(parts[0]); }
+        if(e.date) { let parts = String(e.date).split('-'); if(parts.length > 0) uniqueYears.add(parts[0]); }
     });
     let yearsArray = Array.from(uniqueYears).sort((a,b) => b - a); 
     const currentSelectedYear = ys.value;
@@ -337,8 +361,8 @@ function updateChartMonthDropdown() {
     const selectedYear = ys.value;
     let uniqueMonths = new Set();
     validExpenseData.forEach(e => {
-        if(e.date && e.date.startsWith(selectedYear + '-')) {
-            let parts = e.date.split('-');
+        if(e.date && String(e.date).startsWith(selectedYear + '-')) {
+            let parts = String(e.date).split('-');
             if(parts.length > 1) uniqueMonths.add(parseInt(parts[1], 10));
         }
     });
@@ -359,8 +383,7 @@ function getExceptionReason(exp) {
     let tUser = exp.targetUser || exp.user;
     if (!appData['使用者'].find(u => u.name === tUser)) reasons.push("被使用者");
     
-    // 如果是校正明細刻意產生的，讓它維持異常
-    if (exp.mainCategory.includes('校正') && exp.subCategory === '未選擇小項目') return "請為手動校正差額選擇正確的分類";
+    if (String(exp.mainCategory || '').includes('校正') && String(exp.subCategory || '') === '未選擇小項目') return "請為手動校正差額選擇正確的分類";
 
     if (!appData['大分類'].find(c => c.name === exp.mainCategory)) reasons.push("大分類");
     if (!appData['小分類'].find(c => c.name === exp.subCategory)) reasons.push("小分類");
@@ -372,44 +395,57 @@ function fetchData() {
     const globalSel = document.getElementById('globalLedgerSelect');
     const ledger = globalSel ? globalSel.value : '日常帳本';
     
+    // UI回饋
+    const list = document.getElementById('expenseList');
+    if(list) list.innerHTML = `<div class="empty-state">資料與試算表同步中...</div>`;
+
     fetch(SCRIPT_URL, { method: 'POST', body: JSON.stringify({ action: "getData", ledgerName: ledger }) })
     .then(r => r.json())
     .then(res => {
+        // 🌟 錯誤防護：確認後端回傳格式正確
+        if(res.status === "error") throw new Error(res.message || "後端發生未知錯誤");
+
         appData['帳本'] = (res.manageData || []).filter(d => d.type === '帳本');
         appData['使用者'] = (res.manageData || []).filter(d => d.type === '使用者');
         appData['大分類'] = (res.manageData || []).filter(d => d.type === '大分類');
         appData['小分類'] = (res.manageData || []).filter(d => d.type === '小分類');
         appData['專案'] = (res.manageData || []).filter(d => d.type === '專案'); 
         
-        // 🌟 自動注入信用卡預設分類
+        // 🌟 自動注入預設分類
         if (!appData['大分類'].find(c => c.name === '信用卡')) {
             appData['大分類'].push({ id: 'cc_main', name: '信用卡', parentName: '', icon: '💳', color: '' });
         }
         if (!appData['小分類'].find(c => c.name === '繳信用卡')) {
             appData['小分類'].push({ id: 'cc_sub', name: '繳信用卡', parentName: '信用卡', icon: '💳', color: '' });
         }
-
-        // 🌟 自動注入轉帳預設分類
         if (!appData['大分類'].find(c => c.name === '轉帳')) {
             appData['大分類'].push({ id: 'transfer_main', name: '轉帳', parentName: '', icon: '🔄', color: '' });
         }
         if (!appData['小分類'].find(c => c.name === '轉帳')) {
             appData['小分類'].push({ id: 'transfer_sub', name: '轉帳', parentName: '轉帳', icon: '💸', color: '' });
         }
+        if (!appData['大分類'].find(c => c.name === '結帳')) {
+            appData['大分類'].push({ id: 'chk_main', name: '結帳', parentName: '', icon: '📝', color: '' });
+        }
+        if (!appData['小分類'].find(c => c.name === '結帳')) {
+            appData['小分類'].push({ id: 'chk_sub', name: '結帳', parentName: '結帳', icon: '📝', color: '' });
+        }
 
         validExpenseData = [];
         exceptionExpenseData = [];
         
         (res.expenseData || []).forEach(e => {
+            // 🌟 嚴格型別防護：防止試算表數字格式導致字串操作崩潰
             if (e.date) {
-                if (e.date.includes('T')) {
-                    let d = new Date(e.date); 
+                let dateStr = String(e.date);
+                if (dateStr.includes('T')) {
+                    let d = new Date(dateStr); 
                     if (!isNaN(d.getTime())) e.date = formatDate(d);
                 } else {
-                    e.date = e.date.substring(0, 10);
+                    e.date = dateStr.substring(0, 10);
                 }
             }
-            e.payMethod = e.payMethod || '存款';
+            e.payMethod = String(e.payMethod || '存款');
 
             let reason = getExceptionReason(e);
             if (reason) { e.exceptionReason = reason; exceptionExpenseData.push(e); } 
@@ -431,7 +467,24 @@ function fetchData() {
         if (document.getElementById('page-compare').classList.contains('active')) {
             renderComparePage();
         }
-    }).catch(err => console.log("背景抓取失敗"));
+    })
+    .catch(err => {
+        // 🌟 錯誤顯示機制：不會再卡在載入中
+        console.error("Fetch Data Error:", err);
+        if(list) {
+            list.innerHTML = `
+            <div class="empty-state" style="color:#e53935; padding: 20px;">
+                <div style="font-size:30px; margin-bottom:10px;">⚠️</div>
+                <div style="font-weight:bold; font-size:16px;">無法載入資料</div>
+                <div style="font-size:13px; color:#555; margin-top:8px;">
+                    錯誤原因：${err.message}<br><br>
+                    請確認：<br>
+                    1. Google Apps Script 網址是否最新？<br>
+                    2. GAS 部署時是否選擇了「新版本」？
+                </div>
+            </div>`;
+        }
+    });
 }
 
 window.toggleGroupView = function() {
@@ -451,208 +504,16 @@ window.toggleGroupView = function() {
     renderDailyList();
 };
 
-window.renderDailyList = function() {
-    const list = document.getElementById('expenseList');
-    document.getElementById('dailyDetailTitle').innerText = `${selectedDateStr} 明細`;
-    
-    const dailyData = validExpenseData.filter(e => e.date === selectedDateStr);
-    
-    if (dailyData.length === 0) {
-        list.innerHTML = `<div class="empty-state">本日無記帳紀錄</div>`;
-        return;
+window.toggleUserTotal = function(username, isChecked) {
+    let activeUsers = JSON.parse(localStorage.getItem('activeUsersForTotal')) || [];
+    if (isChecked && !activeUsers.includes(username)) {
+        activeUsers.push(username);
+    } else if (!isChecked) {
+        activeUsers = activeUsers.filter(u => u !== username);
     }
-    
-    let dailyIncome = 0;
-    let dailyExpense = 0;
-
-    // 🌟 合併邏輯運算
-    let displayData = dailyData;
-    if (isGroupedView) {
-        let grouped = {};
-        dailyData.forEach(e => {
-            // 將除了金額、ID、備註以外的所有屬性組成唯一 Key
-            let key = `${e.type}_${e.mainCategory}_${e.subCategory}_${e.user}_${e.targetUser}_${e.project}_${e.payMethod}`;
-            if (!grouped[key]) {
-                grouped[key] = { ...e, amount: 0, count: 0, contents: [] };
-            }
-            grouped[key].amount += Number(e.amount);
-            grouped[key].count += 1;
-            if (e.content && e.content.trim() !== '') grouped[key].contents.push(e.content);
-        });
-        
-        displayData = Object.values(grouped).map(g => {
-            let combinedContent = g.contents.join(' / ');
-            return {
-                ...g,
-                content: g.count > 1 
-                    ? `<span style="color:#e65100; font-weight:bold;">(合併 ${g.count} 筆)</span> ${combinedContent}`
-                    : g.content,
-                isGrouped: g.count > 1 // 標記為已被合併的資料
-            };
-        });
-    }
-    
-    let listHTML = displayData.map(e => {
-        const amt = Number(e.amount) || 0;
-        
-        let isPayingCreditCardBill = (e.mainCategory === '信用卡' && e.subCategory === '繳信用卡' && e.type === '支出');
-        let isTransfer = (e.mainCategory === '轉帳'); 
-        
-        // 排除轉帳與繳卡費進入每日淨額計算
-        if (!isPayingCreditCardBill && !isTransfer) {
-            if(e.type === '支出') dailyExpense += amt;
-            else if(e.type === '收入') dailyIncome += amt; 
-        }
-        
-        let color = e.type === '收入' ? '#4CAF50' : '#ef5350';
-        let sign = e.type === '收入' ? '+' : '-';
-        if (isTransfer) {
-            color = '#8e24aa'; 
-            sign = '';
-        }
-
-        const emoji = getIcon(e.mainCategory, '大分類');
-        const userStyle = getUserColorStyle(e.user); 
-        
-        let targetHtml = '';
-        let tUser = e.targetUser || e.user;
-        if (tUser !== e.user) {
-            const targetStyle = getUserColorStyle(tUser);
-            targetHtml = `<span style="color:#aaa; font-size:10px; margin:0 2px;">▶</span><span class="detail-user-tag" style="${targetStyle}">${tUser}</span>`;
-        }
-
-        let projectHtml = e.project ? `<span class="detail-project-tag">★ ${e.project}</span>` : '';
-        
-        let payBadge = '';
-        if (isTransfer) {
-            payBadge = `<span class="detail-project-tag" style="background:#f3e5f5; color:#7b1fa2; border-color:#e1bee7;">🔄 內部轉帳</span>`;
-        } else {
-            payBadge = e.payMethod === '信用卡' ? `<span class="detail-project-tag" style="background:#e3f2fd; color:#1565c0; border-color:#bbdefb;">💳 信用卡</span>` : `<span class="detail-project-tag" style="background:#e8f5e9; color:#2e7d32; border-color:#c8e6c9;">💵 存款</span>`;
-        }
-
-        // 🌟 防呆設計：如果是合併的項目，隱藏編輯與刪除按鈕
-        let actionsHtml = '';
-        if (e.isGrouped) {
-            actionsHtml = `<span style="font-size:12px; color:#999; margin-right:5px; font-weight:bold;">取消合併以編輯</span>`;
-        } else {
-            actionsHtml = `
-                <button class="icon-btn-gray" style="font-size:13px; background:#f5f5f5; padding:4px 8px; border-radius:4px;" onclick="editExpense('${e.id}')">✎</button>
-                <button class="icon-btn-red" style="font-size:13px; background:#ffebee; padding:4px 8px; border-radius:4px;" onclick="deleteExpense('${e.id}')">✕</button>
-            `;
-        }
-
-        return `
-        <div style="padding:12px 0; border-bottom:1px solid #f0f0f0;">
-            <div style="display:flex; justify-content:space-between; align-items:flex-start;">
-                <div>
-                    <div style="display:flex; align-items:center; flex-wrap:wrap; gap:5px;">
-                        <span class="cat-emoji">${emoji}</span>
-                        <span class="detail-tag">${e.subCategory}</span>
-                        ${payBadge}
-                        ${projectHtml}
-                        <span class="detail-user-tag" style="${userStyle}">${e.user}</span>
-                        ${targetHtml}
-                    </div>
-                    ${e.content ? `<div style="font-size:13.5px; color:#333; margin-top:8px; padding-left:40px; font-weight:500;">${e.content}</div>` : ''}
-                </div>
-                <div style="text-align:right;">
-                    <div style="color:${color}; font-weight:bold; font-size:16px; margin-bottom:4px;">${sign}$${amt}</div>
-                    <div style="display:flex; gap:8px; justify-content:flex-end; align-items:center;">
-                        ${actionsHtml}
-                    </div>
-                </div>
-            </div>
-        </div>`;
-    }).join('');
-    
-    let netAmount = dailyIncome - dailyExpense;
-    let netColor = netAmount >= 0 ? '#2e7d32' : '#c62828';
-    let netBg = netAmount >= 0 ? '#e8f5e9' : '#ffebee';
-    let netSign = netAmount >= 0 ? '' : '-';
-
-    const summaryHTML = `
-        <div style="background:${netBg}; padding:10px; border-radius:6px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; font-weight:bold; color:${netColor};">
-            <span>本日淨收支 (不含轉帳/繳卡)</span>
-            <span style="font-size:18px;">${netSign}$${Math.abs(netAmount).toLocaleString()}</span>
-        </div>`;
-    list.innerHTML = summaryHTML + listHTML;
+    localStorage.setItem('activeUsersForTotal', JSON.stringify(activeUsers));
+    renderManageLists();
 };
-
-window.renderExceptionList = function() {
-    const list = document.getElementById('exceptionList');
-    if(!list) return;
-    
-    if (exceptionExpenseData.length === 0) {
-        list.innerHTML = `<div class="empty-state">太棒了！目前無任何異常資料</div>`;
-        return;
-    }
-    
-    list.innerHTML = exceptionExpenseData.map(e => {
-        const userStyle = getUserColorStyle(e.user);
-        let tUser = e.targetUser || e.user;
-        let targetHtml = '';
-        if (tUser !== e.user) {
-            const targetStyle = getUserColorStyle(tUser);
-            targetHtml = `<span style="color:#aaa; font-size:10px; margin:0 2px;">▶</span><span class="detail-user-tag" style="${targetStyle}">${tUser}</span>`;
-        }
-
-        return `
-        <div style="padding:15px 0; border-bottom:1px solid #f0f0f0;">
-            <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
-                <div style="font-weight:bold; font-size:15px; text-decoration: line-through; color:#999;">${e.subCategory}</div>
-                <div style="color:${e.type === '收入' ? '#4CAF50' : '#ef5350'}; font-weight:bold;">$${e.amount}</div>
-            </div>
-            <div style="font-size:12px; color:#888; margin-bottom:8px; display:flex; align-items:center; gap:6px;">
-                <span style="background:#ffebee; color:#c62828; padding:2px 6px; border-radius:4px; font-weight:bold;">⚠️ ${e.exceptionReason}</span>
-                <span>${e.date}</span>
-                <span class="detail-user-tag" style="${userStyle}">${e.user}</span>
-                ${targetHtml}
-            </div>
-            <div style="display:flex; gap:8px; justify-content:flex-end;">
-                <button class="icon-btn-gray" style="font-size:13px; background:#f5f5f5; padding:6px 12px; border-radius:4px; font-weight:bold;" onclick="editExpense('${e.id}')">✎ 重新編輯</button>
-                <button class="icon-btn-red" style="font-size:13px; background:#ffebee; padding:6px 12px; border-radius:4px; font-weight:bold;" onclick="deleteExpense('${e.id}')">✕ 永久刪除</button>
-            </div>
-        </div>`;
-    }).join('');
-};
-
-window.quickAdd = function(type) {
-    let parentName = '';
-    if (type === '小分類') {
-        parentName = document.getElementById('mainCategory').value;
-        if (!parentName) return alert('請先選擇左側的「大項目」！');
-    }
-    let displayType = type === '大分類' ? '大項目' : (type === '小分類' ? '小項目' : type);
-    let newName = prompt(`請輸入新的 ${displayType} 名稱：`);
-    if (!newName || newName.trim() === '') return;
-
-    let icon = '📁';
-    let color = '';
-    if (type === '大分類') icon = prompt(`請為「${newName}」設定一個 Emoji 圖示：\n(例如：🍔、🚗、🎮)`, '🏷️') || '🏷️';
-    else if (type === '使用者') color = getRandomColor(); 
-    
-    const btn = document.getElementById('submitBtn');
-    btn.innerText = '新增中...'; btn.disabled = true;
-    const payload = { action: 'manage', operation: 'add', type: type, id: Date.now(), name: newName, parentName: parentName, icon: icon, color: color };
-
-    fetch(SCRIPT_URL, { method: 'POST', body: JSON.stringify(payload) })
-    .then(res => res.json())
-    .then(res => {
-        if(res.status === 'success') {
-            appData[type].push({id: payload.id, name: payload.name, parentName: payload.parentName, icon: payload.icon, color: payload.color});
-            updateFormDropdowns(); 
-            if (type === '使用者') { 
-                document.getElementById('user').value = payload.name; 
-                document.getElementById('targetUser').value = payload.name; 
-            }
-            if (type === '大分類') { document.getElementById('mainCategory').value = payload.name; updateFormSubCategory(); }
-            if (type === '小分類') document.getElementById('subCategory').value = payload.name;
-            if (type === '專案') document.getElementById('project').value = payload.name;
-            renderManageLists(); 
-        }
-    })
-    .finally(() => { btn.innerText = document.getElementById('expenseOperation').value === 'edit' ? '儲存修改' : '儲存新增'; btn.disabled = false; });
-}
 
 window.renderManageLists = function() {
     const globalSel = document.getElementById('globalLedgerSelect');
@@ -675,16 +536,27 @@ window.renderManageLists = function() {
         let totalAllDeposit = 0;
         let totalAllCredit = 0; 
         
+        let activeUsers = JSON.parse(localStorage.getItem('activeUsersForTotal'));
+        if (!Array.isArray(activeUsers)) {
+            activeUsers = appData['使用者'].map(u => u.name); 
+            localStorage.setItem('activeUsersForTotal', JSON.stringify(activeUsers));
+        }
+        
         let userHtml = appData['使用者'].map(item => {
             const c = item.color || '#1976d2';
             const balances = getUserBalance(item.name); 
-            totalAllDeposit += balances.deposit; 
-            totalAllCredit += balances.credit;
+            const isChecked = activeUsers.includes(item.name);
+            
+            if (isChecked) {
+                totalAllDeposit += balances.deposit; 
+                totalAllCredit += balances.credit;
+            }
             
             return `
             <li class="cat-item">
                 <div class="item-header">
-                    <div class="item-icon" style="background-color:${c}20; color:${c}; border:1px solid ${c}50; font-size:14px; font-weight:bold;">色</div>
+                    <input type="checkbox" title="計入系統總額" style="margin-right:12px; width:18px; height:18px; cursor:pointer;" ${isChecked ? 'checked' : ''} onchange="toggleUserTotal('${item.name}', this.checked)">
+                    <div class="item-icon" style="background-color:${c}20; color:${c}; border:1px solid ${c}50; font-size:14px; font-weight:bold; margin-right:10px;">色</div>
                     <div class="item-content">
                         <div style="font-size:16px;">${item.name}</div>
                         <div style="font-size:13px; color:#888; margin-top:3px; display:flex; gap:10px;">
@@ -757,78 +629,169 @@ window.renderManageLists = function() {
     updateFormDropdowns(); 
 };
 
-function renderSimpleList(containerId, type, icon) {
-    const el = document.getElementById(containerId);
-    if(el) {
-        el.innerHTML = appData[type].map(item => `
-            <li class="cat-item">
-                <div class="item-header">
-                    <div class="item-icon">${icon}</div>
-                    <div class="item-content">${item.name}</div>
-                    <div class="item-actions">
-                        <button class="icon-btn-gray" onclick="openManageModal('edit', '${type}', '${item.id}', '${item.name}')">✎</button>
-                        <button class="icon-btn-red" onclick="deleteItem('${type}', '${item.id}')">✕</button>
+window.renderDailyList = function() {
+    const list = document.getElementById('expenseList');
+    document.getElementById('dailyDetailTitle').innerText = `${selectedDateStr} 明細`;
+    
+    const dailyData = validExpenseData.filter(e => e.date === selectedDateStr);
+    
+    if (dailyData.length === 0) {
+        list.innerHTML = `<div class="empty-state">本日無記帳紀錄</div>`;
+        return;
+    }
+    
+    let dailyIncome = 0;
+    let dailyExpense = 0;
+
+    let displayData = dailyData;
+    if (isGroupedView) {
+        let grouped = {};
+        dailyData.forEach(e => {
+            let key = `${e.type}_${e.mainCategory}_${e.subCategory}_${e.user}_${e.targetUser}_${e.project}_${e.payMethod}`;
+            if (!grouped[key]) {
+                grouped[key] = { ...e, amount: 0, count: 0, contents: [] };
+            }
+            grouped[key].amount += Number(e.amount);
+            grouped[key].count += 1;
+            if (e.content && e.content.trim() !== '') grouped[key].contents.push(e.content);
+        });
+        
+        displayData = Object.values(grouped).map(g => {
+            let combinedContent = g.contents.join(' / ');
+            return {
+                ...g,
+                content: g.count > 1 
+                    ? `<span style="color:#e65100; font-weight:bold;">(合併 ${g.count} 筆)</span> ${combinedContent}`
+                    : g.content,
+                isGrouped: g.count > 1
+            };
+        });
+    }
+    
+    let listHTML = displayData.map(e => {
+        const amt = Number(e.amount) || 0;
+        
+        let isPayingCreditCardBill = (e.mainCategory === '信用卡' && e.subCategory === '繳信用卡' && e.type === '支出');
+        let isTransfer = (e.mainCategory === '轉帳'); 
+        let isCheckout = isCheckoutRecord(e); 
+        
+        if (!isPayingCreditCardBill && !isTransfer && !isCheckout) {
+            if(e.type === '支出') dailyExpense += amt;
+            else if(e.type === '收入') dailyIncome += amt; 
+        }
+        
+        let color = e.type === '收入' ? '#4CAF50' : '#ef5350';
+        let sign = e.type === '收入' ? '+' : '-';
+        if (isTransfer || isCheckout) {
+            color = '#8e24aa'; 
+            sign = '';
+        }
+
+        const emoji = getIcon(e.mainCategory, '大分類');
+        const userStyle = getUserColorStyle(e.user); 
+        
+        let targetHtml = '';
+        let tUser = e.targetUser || e.user;
+        if (tUser !== e.user) {
+            const targetStyle = getUserColorStyle(tUser);
+            targetHtml = `<span style="color:#aaa; font-size:10px; margin:0 2px;">▶</span><span class="detail-user-tag" style="${targetStyle}">${tUser}</span>`;
+        }
+
+        let projectHtml = e.project ? `<span class="detail-project-tag">★ ${e.project}</span>` : '';
+        
+        let payBadge = '';
+        if (isTransfer) {
+            payBadge = `<span class="detail-project-tag" style="background:#f3e5f5; color:#7b1fa2; border-color:#e1bee7;">🔄 內部轉帳</span>`;
+        } else if (isCheckout) {
+            payBadge = `<span class="detail-project-tag" style="background:#e0f7fa; color:#006064; border-color:#b2ebf2;">📝 系統結帳</span>`;
+        } else {
+            payBadge = e.payMethod === '信用卡' ? `<span class="detail-project-tag" style="background:#e3f2fd; color:#1565c0; border-color:#bbdefb;">💳 信用卡</span>` : `<span class="detail-project-tag" style="background:#e8f5e9; color:#2e7d32; border-color:#c8e6c9;">💵 存款</span>`;
+        }
+
+        let actionsHtml = '';
+        if (e.isGrouped) {
+            actionsHtml = `<span style="font-size:12px; color:#999; margin-right:5px; font-weight:bold;">取消合併以編輯</span>`;
+        } else {
+            actionsHtml = `
+                <button class="icon-btn-gray" style="font-size:13px; background:#f5f5f5; padding:4px 8px; border-radius:4px;" onclick="editExpense('${e.id}')">✎</button>
+                <button class="icon-btn-red" style="font-size:13px; background:#ffebee; padding:4px 8px; border-radius:4px;" onclick="deleteExpense('${e.id}')">✕</button>
+            `;
+        }
+
+        return `
+        <div style="padding:12px 0; border-bottom:1px solid #f0f0f0;">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                <div>
+                    <div style="display:flex; align-items:center; flex-wrap:wrap; gap:5px;">
+                        <span class="cat-emoji">${emoji}</span>
+                        <span class="detail-tag">${e.subCategory}</span>
+                        ${payBadge}
+                        ${projectHtml}
+                        <span class="detail-user-tag" style="${userStyle}">${e.user}</span>
+                        ${targetHtml}
+                    </div>
+                    ${e.content ? `<div style="font-size:13.5px; color:#333; margin-top:8px; padding-left:40px; font-weight:500;">${e.content}</div>` : ''}
+                </div>
+                <div style="text-align:right;">
+                    <div style="color:${color}; font-weight:bold; font-size:16px; margin-bottom:4px;">${sign}$${amt}</div>
+                    <div style="display:flex; gap:8px; justify-content:flex-end; align-items:center;">
+                        ${actionsHtml}
                     </div>
                 </div>
-            </li>
-        `).join('');
-    }
-}
-
-function updateFormDropdowns() {
-    const userSel = document.getElementById('user');
-    const targetUserSel = document.getElementById('targetUser');
-    const mainSel = document.getElementById('mainCategory');
-    const projectSel = document.getElementById('project');
+            </div>
+        </div>`;
+    }).join('');
     
-    const curUser = userSel ? userSel.value : '';
-    const curTarget = targetUserSel ? targetUserSel.value : '';
-    const curMain = mainSel ? mainSel.value : '';
-    const curProject = projectSel ? projectSel.value : '';
+    let netAmount = dailyIncome - dailyExpense;
+    let netColor = netAmount >= 0 ? '#2e7d32' : '#c62828';
+    let netBg = netAmount >= 0 ? '#e8f5e9' : '#ffebee';
+    let netSign = netAmount >= 0 ? '' : '-';
 
-    if(userSel) {
-        userSel.innerHTML = `<option value="" disabled>請選擇</option>` + appData['使用者'].map(i => `<option value="${i.name}">${i.name}</option>`).join('');
-        if (curUser && appData['使用者'].find(u => u.name === curUser)) userSel.value = curUser;
-        else userSel.value = '';
-    }
+    const summaryHTML = `
+        <div style="background:${netBg}; padding:10px; border-radius:6px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; font-weight:bold; color:${netColor};">
+            <span>本日淨收支 (不含轉帳/結帳/繳卡)</span>
+            <span style="font-size:18px;">${netSign}$${Math.abs(netAmount).toLocaleString()}</span>
+        </div>`;
+    list.innerHTML = summaryHTML + listHTML;
+};
 
-    if(targetUserSel) {
-        targetUserSel.innerHTML = `<option value="" disabled>請選擇</option>` + appData['使用者'].map(i => `<option value="${i.name}">${i.name}</option>`).join('');
-        if (curTarget && appData['使用者'].find(u => u.name === curTarget)) targetUserSel.value = curTarget;
-        else targetUserSel.value = userSel.value; 
-    }
-
-    if(mainSel) {
-        mainSel.innerHTML = `<option value="" disabled>請選擇</option>` + appData['大分類'].map(i => `<option value="${i.name}">${i.name}</option>`).join('');
-        if(curMain && appData['大分類'].find(c => c.name === curMain)) mainSel.value = curMain;
-        else mainSel.value = '';
-    }
-
-    if(projectSel) {
-        projectSel.innerHTML = `<option value="">無</option>` + appData['專案'].map(i => `<option value="${i.name}">${i.name}</option>`).join('');
-        if (curProject && appData['專案'].find(p => p.name === curProject)) projectSel.value = curProject;
-        else projectSel.value = '';
-    }
-
-    updateFormSubCategory();
-}
-
-function updateFormSubCategory() {
-    const mainSel = document.getElementById('mainCategory');
-    const subSel = document.getElementById('subCategory');
-    if(!mainSel || !subSel) return;
-
-    const curSub = subSel.value;
-    const validSubs = appData['小分類'].filter(sub => sub.parentName === mainSel.value);
+window.renderExceptionList = function() {
+    const list = document.getElementById('exceptionList');
+    if(!list) return;
     
-    if (validSubs.length > 0) {
-        subSel.innerHTML = `<option value="" disabled>請選擇</option>` + validSubs.map(i => `<option value="${i.name}">${i.name}</option>`).join('');
-        if (curSub && validSubs.find(s => s.name === curSub)) subSel.value = curSub;
-        else subSel.value = '';
-    } else {
-        subSel.innerHTML = `<option value="" disabled selected>無小分類</option>`;
+    if (exceptionExpenseData.length === 0) {
+        list.innerHTML = `<div class="empty-state">太棒了！目前無任何異常資料</div>`;
+        return;
     }
-}
+    
+    list.innerHTML = exceptionExpenseData.map(e => {
+        const userStyle = getUserColorStyle(e.user);
+        let tUser = e.targetUser || e.user;
+        let targetHtml = '';
+        if (tUser !== e.user) {
+            const targetStyle = getUserColorStyle(tUser);
+            targetHtml = `<span style="color:#aaa; font-size:10px; margin:0 2px;">▶</span><span class="detail-user-tag" style="${targetStyle}">${tUser}</span>`;
+        }
+
+        return `
+        <div style="padding:15px 0; border-bottom:1px solid #f0f0f0;">
+            <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
+                <div style="font-weight:bold; font-size:15px; text-decoration: line-through; color:#999;">${e.subCategory}</div>
+                <div style="color:${e.type === '收入' ? '#4CAF50' : '#ef5350'}; font-weight:bold;">$${e.amount}</div>
+            </div>
+            <div style="font-size:12px; color:#888; margin-bottom:8px; display:flex; align-items:center; gap:6px;">
+                <span style="background:#ffebee; color:#c62828; padding:2px 6px; border-radius:4px; font-weight:bold;">⚠️ ${e.exceptionReason}</span>
+                <span>${e.date}</span>
+                <span class="detail-user-tag" style="${userStyle}">${e.user}</span>
+                ${targetHtml}
+            </div>
+            <div style="display:flex; gap:8px; justify-content:flex-end;">
+                <button class="icon-btn-gray" style="font-size:13px; background:#f5f5f5; padding:6px 12px; border-radius:4px; font-weight:bold;" onclick="editExpense('${e.id}')">✎ 重新編輯</button>
+                <button class="icon-btn-red" style="font-size:13px; background:#ffebee; padding:6px 12px; border-radius:4px; font-weight:bold;" onclick="deleteExpense('${e.id}')">✕ 永久刪除</button>
+            </div>
+        </div>`;
+    }).join('');
+};
 
 window.renderChart = function() {
     const container = document.getElementById('customChartBars');
@@ -854,6 +817,11 @@ window.renderChart = function() {
     
     filtered = filtered.filter(e => !(e.mainCategory === '信用卡' && e.subCategory === '繳信用卡' && e.type === '支出'));
     filtered = filtered.filter(e => e.mainCategory !== '轉帳');
+
+    const showCheckout = document.getElementById('chartShowCheckout') ? document.getElementById('chartShowCheckout').checked : false;
+    if (!showCheckout) {
+        filtered = filtered.filter(e => !isCheckoutRecord(e));
+    }
 
     if (currentChartInOut === '支出') filtered = filtered.filter(e => e.type === '支出');
     else if (currentChartInOut === '收入') filtered = filtered.filter(e => e.type === '收入');
@@ -990,6 +958,11 @@ window.openChartDetail = function(label) {
     filtered = filtered.filter(e => !(e.mainCategory === '信用卡' && e.subCategory === '繳信用卡' && e.type === '支出'));
     filtered = filtered.filter(e => e.mainCategory !== '轉帳');
 
+    const showCheckout = document.getElementById('chartShowCheckout') ? document.getElementById('chartShowCheckout').checked : false;
+    if (!showCheckout) {
+        filtered = filtered.filter(e => !isCheckoutRecord(e));
+    }
+
     if (currentChartInOut === '支出') filtered = filtered.filter(e => e.type === '支出');
     else if (currentChartInOut === '收入') filtered = filtered.filter(e => e.type === '收入');
 
@@ -1088,6 +1061,11 @@ window.renderComparePage = function() {
         e.mainCategory !== '轉帳'
     );
 
+    const showCheckout = document.getElementById('compareShowCheckout') ? document.getElementById('compareShowCheckout').checked : false;
+    if (!showCheckout) {
+        expenses = expenses.filter(e => !isCheckoutRecord(e));
+    }
+
     if (compareMode === 'currentYearMonth') {
         cardTitle = `${baseYearStr}年 月份支出趨勢`;
         xLabels = ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"];
@@ -1121,7 +1099,7 @@ window.renderComparePage = function() {
 
     } else if (compareMode === 'month') {
         cardTitle = `歷年 ${month}月 支出比較`;
-        let uniqueYears = Array.from(new Set(validExpenseData.map(e => e.date.split('-')[0]))).sort();
+        let uniqueYears = Array.from(new Set(validExpenseData.map(e => String(e.date).split('-')[0]))).sort();
         xLabels = uniqueYears.map(y => y + "年");
         dataArray = new Array(xLabels.length).fill(0);
 
@@ -1206,6 +1184,44 @@ function renderSvgChart(container, xLabels, datasets) {
 
     svg += `</svg>`;
     container.innerHTML = svg;
+}
+
+window.quickAdd = function(type) {
+    let parentName = '';
+    if (type === '小分類') {
+        parentName = document.getElementById('mainCategory').value;
+        if (!parentName) return alert('請先選擇左側的「大項目」！');
+    }
+    let displayType = type === '大分類' ? '大項目' : (type === '小分類' ? '小項目' : type);
+    let newName = prompt(`請輸入新的 ${displayType} 名稱：`);
+    if (!newName || newName.trim() === '') return;
+
+    let icon = '📁';
+    let color = '';
+    if (type === '大分類') icon = prompt(`請為「${newName}」設定一個 Emoji 圖示：\n(例如：🍔、🚗、🎮)`, '🏷️') || '🏷️';
+    else if (type === '使用者') color = getRandomColor(); 
+    
+    const btn = document.getElementById('submitBtn');
+    btn.innerText = '新增中...'; btn.disabled = true;
+    const payload = { action: 'manage', operation: 'add', type: type, id: Date.now(), name: newName, parentName: parentName, icon: icon, color: color };
+
+    fetch(SCRIPT_URL, { method: 'POST', body: JSON.stringify(payload) })
+    .then(res => res.json())
+    .then(res => {
+        if(res.status === 'success') {
+            appData[type].push({id: payload.id, name: payload.name, parentName: payload.parentName, icon: payload.icon, color: payload.color});
+            updateFormDropdowns(); 
+            if (type === '使用者') { 
+                document.getElementById('user').value = payload.name; 
+                document.getElementById('targetUser').value = payload.name; 
+            }
+            if (type === '大分類') { document.getElementById('mainCategory').value = payload.name; updateFormSubCategory(); }
+            if (type === '小分類') document.getElementById('subCategory').value = payload.name;
+            if (type === '專案') document.getElementById('project').value = payload.name;
+            renderManageLists(); 
+        }
+    })
+    .finally(() => { btn.innerText = document.getElementById('expenseOperation').value === 'edit' ? '儲存修改' : '儲存新增'; btn.disabled = false; });
 }
 
 window.editExpense = function(id) {
@@ -1366,10 +1382,6 @@ document.getElementById('manageItemForm').onsubmit = function(e) {
         .finally(() => { btn.innerText = '儲存'; btn.disabled = false; });
 };
 
-// ==========================================
-// 存款與信用卡 結算與校正系統
-// ==========================================
-
 window.getUserBalance = function(userName) {
     let deposit = 0;
     let credit = 0;
@@ -1493,4 +1505,80 @@ window.submitBalanceAdjustment = function() {
         })
         .catch(err => { alert('網路錯誤或伺服器無回應'); })
         .finally(() => { btn.innerText = '確認新增差額'; btn.disabled = false; });
+};
+function renderSimpleList(containerId, type, icon) {
+    const el = document.getElementById(containerId);
+    if(el) {
+        el.innerHTML = appData[type].map(item => `
+            <li class="cat-item">
+                <div class="item-header">
+                    <div class="item-icon">${icon}</div>
+                    <div class="item-content">${item.name}</div>
+                    <div class="item-actions">
+                        <button class="icon-btn-gray" onclick="openManageModal('edit', '${type}', '${item.id}', '${item.name}')">✎</button>
+                        <button class="icon-btn-red" onclick="deleteItem('${type}', '${item.id}')">✕</button>
+                    </div>
+                </div>
+            </li>
+        `).join('');
+    }
+}
+window.updateFormDropdowns = function() {
+    const userSel = document.getElementById('user');
+    const targetUserSel = document.getElementById('targetUser');
+    const mainSel = document.getElementById('mainCategory');
+    const projectSel = document.getElementById('project');
+    
+    const curUser = userSel ? userSel.value : '';
+    const curTarget = targetUserSel ? targetUserSel.value : '';
+    const curMain = mainSel ? mainSel.value : '';
+    const curProject = projectSel ? projectSel.value : '';
+
+    if(userSel) {
+        userSel.innerHTML = `<option value="" disabled>請選擇</option>` + appData['使用者'].map(i => `<option value="${i.name}">${i.name}</option>`).join('');
+        if (curUser && appData['使用者'].find(u => u.name === curUser)) userSel.value = curUser;
+        else userSel.value = '';
+    }
+
+    if(targetUserSel) {
+        targetUserSel.innerHTML = `<option value="" disabled>請選擇</option>` + appData['使用者'].map(i => `<option value="${i.name}">${i.name}</option>`).join('');
+        if (curTarget && appData['使用者'].find(u => u.name === curTarget)) targetUserSel.value = curTarget;
+        else targetUserSel.value = userSel.value; 
+    }
+
+    if(mainSel) {
+        mainSel.innerHTML = `<option value="" disabled>請選擇</option>` + appData['大分類'].map(i => `<option value="${i.name}">${i.name}</option>`).join('');
+        if(curMain && appData['大分類'].find(c => c.name === curMain)) mainSel.value = curMain;
+        else mainSel.value = '';
+    }
+
+    if(projectSel) {
+        projectSel.innerHTML = `<option value="">無</option>` + appData['專案'].map(i => `<option value="${i.name}">${i.name}</option>`).join('');
+        if (curProject && appData['專案'].find(p => p.name === curProject)) projectSel.value = curProject;
+        else projectSel.value = '';
+    }
+
+    // 更新連動的小分類
+    if (typeof updateFormSubCategory === 'function') {
+        updateFormSubCategory();
+    } else if (typeof window.updateFormSubCategory === 'function') {
+        window.updateFormSubCategory();
+    }
+};
+
+window.updateFormSubCategory = function() {
+    const mainSel = document.getElementById('mainCategory');
+    const subSel = document.getElementById('subCategory');
+    if(!mainSel || !subSel) return;
+
+    const curSub = subSel.value;
+    const validSubs = appData['小分類'].filter(sub => sub.parentName === mainSel.value);
+    
+    if (validSubs.length > 0) {
+        subSel.innerHTML = `<option value="" disabled>請選擇</option>` + validSubs.map(i => `<option value="${i.name}">${i.name}</option>`).join('');
+        if (curSub && validSubs.find(s => s.name === curSub)) subSel.value = curSub;
+        else subSel.value = '';
+    } else {
+        subSel.innerHTML = `<option value="" disabled selected>無小分類</option>`;
+    }
 };
