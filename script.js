@@ -1,6 +1,25 @@
-// 【重要】請替換為你最新部署的 GAS URL
-const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxAlklJVn9ibCGzpOtSF0JnN3mCGVD5Iaw3aYsDcnNUE_Kn6i27qEgOuBWg5JpOK4xTqA/exec';
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
+import { 
+    getFirestore, collection, getDocs, doc, setDoc, deleteDoc, query, where 
+} from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
 
+// ==========================================
+// TODO: 替換為你的 Firebase 專案設定
+// ==========================================
+const firebaseConfig = {
+  apiKey: "AIzaSyCJG8IR8ibUWF1m8-4C9VInA2FXXWSQSJ8",
+  authDomain: "bookkeeping-80cd1.firebaseapp.com",
+  projectId: "bookkeeping-80cd1",
+  storageBucket: "bookkeeping-80cd1.firebasestorage.app",
+  messagingSenderId: "445068237032",
+  appId: "1:445068237032:web:21c27ffbebb283efa2115d",
+  measurementId: "G-DT8LFSFRXF"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+// 全域變數
 let appData = { '帳本': [], '使用者': [], '大分類': [], '小分類': [], '專案': [] };
 let validExpenseData = []; 
 let exceptionExpenseData = []; 
@@ -15,14 +34,99 @@ let compareMode = 'currentYearMonth';
 let compareSelectedPeriods = [];
 const compareColors = ['#F44336', '#2196F3', '#4CAF50', '#FF9800', '#9C27B0'];
 
-let isGroupedView = false; // 追蹤合併狀態
+let isGroupedView = false;
+let currentAdjustUser = '';
+let currentSysBalances = { deposit: 0, credit: 0 };
 
+// ==========================================
+// 系統啟動與資料讀取
+// ==========================================
 document.addEventListener('DOMContentLoaded', function() {
     initUI();
     initDateSelects(); 
-    fetchData(); 
+    window.fetchData(); 
 });
 
+window.fetchData = async function() {
+    const globalSel = document.getElementById('globalLedgerSelect');
+    const ledger = globalSel ? globalSel.value : '日常帳本';
+    
+    const list = document.getElementById('expenseList');
+    if(list) list.innerHTML = `<div class="empty-state">資料與資料庫同步中...</div>`;
+
+    try {
+        // 1. 讀取管理項目 (分類、使用者等)
+        const manageSnap = await getDocs(collection(db, "manageData"));
+        let manageData = manageSnap.docs.map(d => d.data());
+
+        appData['帳本'] = manageData.filter(d => d.type === '帳本');
+        appData['使用者'] = manageData.filter(d => d.type === '使用者');
+        appData['大分類'] = manageData.filter(d => d.type === '大分類');
+        appData['小分類'] = manageData.filter(d => d.type === '小分類');
+        appData['專案'] = manageData.filter(d => d.type === '專案'); 
+        
+        // 🌟 自動注入預設分類
+        if (!appData['大分類'].find(c => c.name === '信用卡')) appData['大分類'].push({ id: 'cc_main', name: '信用卡', parentName: '', icon: '💳', color: '' });
+        if (!appData['小分類'].find(c => c.name === '繳信用卡')) appData['小分類'].push({ id: 'cc_sub', name: '繳信用卡', parentName: '信用卡', icon: '💳', color: '' });
+        if (!appData['大分類'].find(c => c.name === '轉帳')) appData['大分類'].push({ id: 'transfer_main', name: '轉帳', parentName: '', icon: '🔄', color: '' });
+        if (!appData['小分類'].find(c => c.name === '轉帳')) appData['小分類'].push({ id: 'transfer_sub', name: '轉帳', parentName: '轉帳', icon: '💸', color: '' });
+        if (!appData['大分類'].find(c => c.name === '結帳')) appData['大分類'].push({ id: 'chk_main', name: '結帳', parentName: '', icon: '📝', color: '' });
+        if (!appData['小分類'].find(c => c.name === '結帳')) appData['小分類'].push({ id: 'chk_sub', name: '結帳', parentName: '結帳', icon: '📝', color: '' });
+
+        // 2. 讀取記帳明細
+        const q = query(collection(db, "expenses"), where("ledgerName", "==", ledger));
+        const expenseSnap = await getDocs(q);
+        let rawExpenses = expenseSnap.docs.map(d => d.data());
+
+        validExpenseData = [];
+        exceptionExpenseData = [];
+        
+        rawExpenses.forEach(e => {
+            if (e.date) {
+                let dateStr = String(e.date);
+                if (dateStr.includes('T')) {
+                    let d = new Date(dateStr); 
+                    if (!isNaN(d.getTime())) e.date = formatDate(d);
+                } else {
+                    e.date = dateStr.substring(0, 10);
+                }
+            }
+            e.payMethod = String(e.payMethod || '存款');
+
+            let reason = getExceptionReason(e);
+            if (reason) { e.exceptionReason = reason; exceptionExpenseData.push(e); } 
+            else { validExpenseData.push(e); }
+        });
+        
+        // 渲染畫面
+        window.renderManageLists();
+        updateChartDropdowns(); 
+        initCompareDropdowns(); 
+        
+        renderCalendar();
+        window.renderChart();
+        window.renderDailyList(); 
+        window.renderExceptionList();
+
+        if (document.getElementById('page-chart-detail').classList.contains('active')) window.openChartDetail(currentChartDetailLabel);
+        if (document.getElementById('page-compare').classList.contains('active')) window.renderComparePage();
+
+    } catch(err) {
+        console.error("Fetch Data Error:", err);
+        if(list) {
+            list.innerHTML = `
+            <div class="empty-state" style="color:#e53935; padding: 20px;">
+                <div style="font-size:30px; margin-bottom:10px;">⚠️</div>
+                <div style="font-weight:bold; font-size:16px;">無法載入資料</div>
+                <div style="font-size:13px; color:#555; margin-top:8px;">${err.message}</div>
+            </div>`;
+        }
+    }
+};
+
+// ==========================================
+// 工具函數
+// ==========================================
 function formatDate(d) {
     let month = '' + (d.getMonth() + 1), day = '' + d.getDate(), year = d.getFullYear();
     if (month.length < 2) month = '0' + month;
@@ -68,53 +172,23 @@ function isCheckoutRecord(e) {
     return String(e.mainCategory || '').includes('結帳') || String(e.subCategory || '').includes('結帳');
 }
 
-function renderCalendar() {
-    const grid = document.getElementById('calendarGrid');
-    if(!grid) return;
-    grid.innerHTML = '';
+function getExceptionReason(exp) {
+    let reasons = [];
+    if (!appData['使用者'].find(u => u.name === exp.user)) reasons.push("付款人");
+    let tUser = exp.targetUser || exp.user;
+    if (!appData['使用者'].find(u => u.name === tUser)) reasons.push("被使用者");
     
-    const calY = document.getElementById('calYearSelect');
-    const calM = document.getElementById('calMonthSelect');
-    if(calY) calY.value = currentCalDate.getFullYear();
-    if(calM) calM.value = currentCalDate.getMonth() + 1;
+    if (String(exp.mainCategory || '').includes('校正') && String(exp.subCategory || '') === '未選擇小項目') return "請為手動校正差額選擇正確的分類";
 
-    ['日','一','二','三','四','五','六'].forEach(day => {
-        let el = document.createElement('div'); 
-        el.innerText = day; el.style.fontWeight = 'bold'; el.style.padding = '5px 0'; el.style.color = '#666';
-        grid.appendChild(el);
-    });
-    
-    let firstDay = new Date(currentCalDate.getFullYear(), currentCalDate.getMonth(), 1).getDay();
-    let daysInMonth = new Date(currentCalDate.getFullYear(), currentCalDate.getMonth() + 1, 0).getDate();
-    
-    for(let i=0; i<firstDay; i++) grid.appendChild(document.createElement('div'));
-    
-    const realTodayStr = formatDate(new Date());
-    let recordDates = new Set(validExpenseData.map(e => e.date));
-
-    for(let i=1; i<=daysInMonth; i++) {
-        let cellDate = new Date(currentCalDate.getFullYear(), currentCalDate.getMonth(), i);
-        let cellDateStr = formatDate(cellDate);
-        let el = document.createElement('div'); 
-        el.className = 'cal-day'; 
-        
-        el.innerHTML = `<span>${i}</span>`;
-        if (recordDates.has(cellDateStr)) {
-            el.innerHTML += `<div class="cal-dot"></div>`;
-        }
-        
-        if(cellDateStr === realTodayStr) el.classList.add('today');
-        if(cellDateStr === selectedDateStr) el.classList.add('selected');
-        
-        el.onclick = () => {
-            selectedDateStr = cellDateStr;
-            renderCalendar(); 
-            renderDailyList(); 
-        };
-        grid.appendChild(el);
-    }
+    if (!appData['大分類'].find(c => c.name === exp.mainCategory)) reasons.push("大分類");
+    if (!appData['小分類'].find(c => c.name === exp.subCategory)) reasons.push("小分類");
+    if (reasons.length > 0) return `缺少 ${reasons.join('、')} 資料`;
+    return null;
 }
 
+// ==========================================
+// 初始化 UI 與事件綁定
+// ==========================================
 function initUI() {
     document.querySelectorAll('.bottom-nav .nav-item').forEach(item => {
         item.onclick = function() {
@@ -128,18 +202,18 @@ function initUI() {
             const titleMap = { 'page-home': '日概況', 'page-charts': '統計分析', 'page-manage': '項目管理', 'page-exceptions': '異常資料', 'page-compare': '數據比較' };
             document.getElementById('headerTitle').innerText = titleMap[target] || '';
             
-            if(target === 'page-charts') renderChart();
+            if(target === 'page-charts') window.renderChart();
             if(target === 'page-manage') {
                 document.querySelectorAll('.manage-tabs .tab-item').forEach(t => t.classList.remove('active'));
                 document.querySelectorAll('.manage-content').forEach(c => c.classList.remove('active'));
                 document.querySelector('.manage-tabs .tab-item[data-target="manage-content-users"]').classList.add('active');
                 document.getElementById('manage-content-users').classList.add('active');
-                renderManageLists();
+                window.renderManageLists();
             }
-            if(target === 'page-exceptions') renderExceptionList();
+            if(target === 'page-exceptions') window.renderExceptionList();
             if(target === 'page-compare') {
                 initCompareDropdowns();
-                renderComparePage();
+                window.renderComparePage();
             }
         };
     });
@@ -171,17 +245,16 @@ function initUI() {
     const projectSel = document.getElementById('chartProjectSelect');
     const chartShowCheckout = document.getElementById('chartShowCheckout');
 
-    // 圖表結帳開關記憶
     if(chartShowCheckout) {
         chartShowCheckout.checked = localStorage.getItem('chartShowCheckout') === 'true';
         chartShowCheckout.addEventListener('change', function() {
             localStorage.setItem('chartShowCheckout', this.checked);
-            renderChart();
+            window.renderChart();
         });
     }
 
     [inOutSel, userSel, targetUserSel, monthSel, projectSel].forEach(el => {
-        if(el) el.addEventListener('change', renderChart);
+        if(el) el.addEventListener('change', window.renderChart);
     });
 
     if(timeSel) {
@@ -194,14 +267,14 @@ function initUI() {
             } else { 
                 yearSel.style.display = 'inline-block'; monthSel.style.display = 'inline-block';
             }
-            renderChart();
+            window.renderChart();
         });
     }
     
     if(yearSel) {
         yearSel.addEventListener('change', () => {
             updateChartMonthDropdown();
-            renderChart();
+            window.renderChart();
         });
     }
 
@@ -212,12 +285,11 @@ function initUI() {
     const compMonth = document.getElementById('compareMonth');
     const compareShowCheckout = document.getElementById('compareShowCheckout');
 
-    // 比較頁結帳開關記憶
     if(compareShowCheckout) {
         compareShowCheckout.checked = localStorage.getItem('compareShowCheckout') === 'true';
         compareShowCheckout.addEventListener('change', function() {
             localStorage.setItem('compareShowCheckout', this.checked);
-            renderComparePage();
+            window.renderComparePage();
         });
     }
 
@@ -227,11 +299,11 @@ function initUI() {
             if(compRangeLabel) compRangeLabel.style.display = (compareMode === 'year') ? 'inline-block' : 'none';
             if(compEndYear) compEndYear.style.display = (compareMode === 'year') ? 'inline-block' : 'none';
             if(compMonth) compMonth.style.display = (compareMode === 'month') ? 'inline-block' : 'none';
-            renderComparePage();
+            window.renderComparePage();
         });
     }
     [compBaseYear, compEndYear, compMonth].forEach(el => {
-        if(el) el.addEventListener('change', renderComparePage);
+        if(el) el.addEventListener('change', window.renderComparePage);
     });
 
     const addModalUserSel = document.getElementById('user');
@@ -247,7 +319,7 @@ function initUI() {
         document.getElementById('submitBtn').innerText = '儲存新增';
         document.getElementById('date').value = selectedDateStr; 
         document.getElementById('payMethod').value = '存款'; 
-        updateFormDropdowns();
+        window.updateFormDropdowns();
         document.getElementById('addModal').style.display = 'flex';
     };
     
@@ -255,10 +327,29 @@ function initUI() {
     window.onclick = function(e) { if (e.target.className === 'modal') e.target.style.display = 'none'; };
 
     const globalSel = document.getElementById('globalLedgerSelect');
-    if(globalSel) globalSel.addEventListener('change', fetchData);
+    if(globalSel) globalSel.addEventListener('change', window.fetchData);
 
     const mainCatSel = document.getElementById('mainCategory');
-    if(mainCatSel) mainCatSel.addEventListener('change', () => updateFormSubCategory());
+    if(mainCatSel) mainCatSel.addEventListener('change', () => window.updateFormSubCategory());
+    
+    const adjInput = document.getElementById('adjActualBalance');
+    if(adjInput) {
+        adjInput.addEventListener('input', function() {
+            let actual = Number(this.value) || 0;
+            let type = document.getElementById('adjAccountType').value;
+            let sysBal = type === '存款' ? currentSysBalances.deposit : currentSysBalances.credit;
+            
+            let diff = actual - sysBal;
+            let display = document.getElementById('adjDiffDisplay');
+            if (diff > 0) {
+                display.innerHTML = `差額: <span style="color:#4CAF50;">+$${diff.toLocaleString()} (系統少算，將新增一筆異常收入)</span>`;
+            } else if (diff < 0) {
+                display.innerHTML = `差額: <span style="color:#ef5350;">-$${Math.abs(diff).toLocaleString()} (系統多算，將新增一筆異常支出)</span>`;
+            } else {
+                display.innerHTML = `差額: $0 (無需調整)`;
+            }
+        });
+    }
 }
 
 function initDateSelects() {
@@ -377,114 +468,54 @@ function updateChartMonthDropdown() {
     }
 }
 
-function getExceptionReason(exp) {
-    let reasons = [];
-    if (!appData['使用者'].find(u => u.name === exp.user)) reasons.push("付款人");
-    let tUser = exp.targetUser || exp.user;
-    if (!appData['使用者'].find(u => u.name === tUser)) reasons.push("被使用者");
+// ==========================================
+// 畫面渲染函數
+// ==========================================
+function renderCalendar() {
+    const grid = document.getElementById('calendarGrid');
+    if(!grid) return;
+    grid.innerHTML = '';
     
-    if (String(exp.mainCategory || '').includes('校正') && String(exp.subCategory || '') === '未選擇小項目') return "請為手動校正差額選擇正確的分類";
+    const calY = document.getElementById('calYearSelect');
+    const calM = document.getElementById('calMonthSelect');
+    if(calY) calY.value = currentCalDate.getFullYear();
+    if(calM) calM.value = currentCalDate.getMonth() + 1;
 
-    if (!appData['大分類'].find(c => c.name === exp.mainCategory)) reasons.push("大分類");
-    if (!appData['小分類'].find(c => c.name === exp.subCategory)) reasons.push("小分類");
-    if (reasons.length > 0) return `缺少 ${reasons.join('、')} 資料`;
-    return null;
-}
-
-function fetchData() {
-    const globalSel = document.getElementById('globalLedgerSelect');
-    const ledger = globalSel ? globalSel.value : '日常帳本';
-    
-    // UI回饋
-    const list = document.getElementById('expenseList');
-    if(list) list.innerHTML = `<div class="empty-state">資料與試算表同步中...</div>`;
-
-    fetch(SCRIPT_URL, { method: 'POST', body: JSON.stringify({ action: "getData", ledgerName: ledger }) })
-    .then(r => r.json())
-    .then(res => {
-        // 🌟 錯誤防護：確認後端回傳格式正確
-        if(res.status === "error") throw new Error(res.message || "後端發生未知錯誤");
-
-        appData['帳本'] = (res.manageData || []).filter(d => d.type === '帳本');
-        appData['使用者'] = (res.manageData || []).filter(d => d.type === '使用者');
-        appData['大分類'] = (res.manageData || []).filter(d => d.type === '大分類');
-        appData['小分類'] = (res.manageData || []).filter(d => d.type === '小分類');
-        appData['專案'] = (res.manageData || []).filter(d => d.type === '專案'); 
-        
-        // 🌟 自動注入預設分類
-        if (!appData['大分類'].find(c => c.name === '信用卡')) {
-            appData['大分類'].push({ id: 'cc_main', name: '信用卡', parentName: '', icon: '💳', color: '' });
-        }
-        if (!appData['小分類'].find(c => c.name === '繳信用卡')) {
-            appData['小分類'].push({ id: 'cc_sub', name: '繳信用卡', parentName: '信用卡', icon: '💳', color: '' });
-        }
-        if (!appData['大分類'].find(c => c.name === '轉帳')) {
-            appData['大分類'].push({ id: 'transfer_main', name: '轉帳', parentName: '', icon: '🔄', color: '' });
-        }
-        if (!appData['小分類'].find(c => c.name === '轉帳')) {
-            appData['小分類'].push({ id: 'transfer_sub', name: '轉帳', parentName: '轉帳', icon: '💸', color: '' });
-        }
-        if (!appData['大分類'].find(c => c.name === '結帳')) {
-            appData['大分類'].push({ id: 'chk_main', name: '結帳', parentName: '', icon: '📝', color: '' });
-        }
-        if (!appData['小分類'].find(c => c.name === '結帳')) {
-            appData['小分類'].push({ id: 'chk_sub', name: '結帳', parentName: '結帳', icon: '📝', color: '' });
-        }
-
-        validExpenseData = [];
-        exceptionExpenseData = [];
-        
-        (res.expenseData || []).forEach(e => {
-            // 🌟 嚴格型別防護：防止試算表數字格式導致字串操作崩潰
-            if (e.date) {
-                let dateStr = String(e.date);
-                if (dateStr.includes('T')) {
-                    let d = new Date(dateStr); 
-                    if (!isNaN(d.getTime())) e.date = formatDate(d);
-                } else {
-                    e.date = dateStr.substring(0, 10);
-                }
-            }
-            e.payMethod = String(e.payMethod || '存款');
-
-            let reason = getExceptionReason(e);
-            if (reason) { e.exceptionReason = reason; exceptionExpenseData.push(e); } 
-            else { validExpenseData.push(e); }
-        });
-        
-        renderManageLists();
-        updateChartDropdowns(); 
-        initCompareDropdowns(); 
-        
-        renderCalendar();
-        renderChart();
-        renderDailyList(); 
-        renderExceptionList();
-
-        if (document.getElementById('page-chart-detail').classList.contains('active')) {
-            openChartDetail(currentChartDetailLabel);
-        }
-        if (document.getElementById('page-compare').classList.contains('active')) {
-            renderComparePage();
-        }
-    })
-    .catch(err => {
-        // 🌟 錯誤顯示機制：不會再卡在載入中
-        console.error("Fetch Data Error:", err);
-        if(list) {
-            list.innerHTML = `
-            <div class="empty-state" style="color:#e53935; padding: 20px;">
-                <div style="font-size:30px; margin-bottom:10px;">⚠️</div>
-                <div style="font-weight:bold; font-size:16px;">無法載入資料</div>
-                <div style="font-size:13px; color:#555; margin-top:8px;">
-                    錯誤原因：${err.message}<br><br>
-                    請確認：<br>
-                    1. Google Apps Script 網址是否最新？<br>
-                    2. GAS 部署時是否選擇了「新版本」？
-                </div>
-            </div>`;
-        }
+    ['日','一','二','三','四','五','六'].forEach(day => {
+        let el = document.createElement('div'); 
+        el.innerText = day; el.style.fontWeight = 'bold'; el.style.padding = '5px 0'; el.style.color = '#666';
+        grid.appendChild(el);
     });
+    
+    let firstDay = new Date(currentCalDate.getFullYear(), currentCalDate.getMonth(), 1).getDay();
+    let daysInMonth = new Date(currentCalDate.getFullYear(), currentCalDate.getMonth() + 1, 0).getDate();
+    
+    for(let i=0; i<firstDay; i++) grid.appendChild(document.createElement('div'));
+    
+    const realTodayStr = formatDate(new Date());
+    let recordDates = new Set(validExpenseData.map(e => e.date));
+
+    for(let i=1; i<=daysInMonth; i++) {
+        let cellDate = new Date(currentCalDate.getFullYear(), currentCalDate.getMonth(), i);
+        let cellDateStr = formatDate(cellDate);
+        let el = document.createElement('div'); 
+        el.className = 'cal-day'; 
+        
+        el.innerHTML = `<span>${i}</span>`;
+        if (recordDates.has(cellDateStr)) {
+            el.innerHTML += `<div class="cal-dot"></div>`;
+        }
+        
+        if(cellDateStr === realTodayStr) el.classList.add('today');
+        if(cellDateStr === selectedDateStr) el.classList.add('selected');
+        
+        el.onclick = () => {
+            selectedDateStr = cellDateStr;
+            renderCalendar(); 
+            window.renderDailyList(); 
+        };
+        grid.appendChild(el);
+    }
 }
 
 window.toggleGroupView = function() {
@@ -501,7 +532,7 @@ window.toggleGroupView = function() {
         btn.style.color = '#1565c0';
         btn.style.borderColor = '#bbdefb';
     }
-    renderDailyList();
+    window.renderDailyList();
 };
 
 window.toggleUserTotal = function(username, isChecked) {
@@ -512,7 +543,7 @@ window.toggleUserTotal = function(username, isChecked) {
         activeUsers = activeUsers.filter(u => u !== username);
     }
     localStorage.setItem('activeUsersForTotal', JSON.stringify(activeUsers));
-    renderManageLists();
+    window.renderManageLists();
 };
 
 window.renderManageLists = function() {
@@ -524,7 +555,7 @@ window.renderManageLists = function() {
         else {
             appData['帳本'].forEach(ledger => { globalSel.innerHTML += `<option value="${ledger.name}">${ledger.name}</option>`; });
             if (currentVal && appData['帳本'].find(l => l.name === currentVal)) globalSel.value = currentVal;
-            else { globalSel.value = appData['帳本'][0].name; fetchData(); }
+            else { globalSel.value = appData['帳本'][0].name; window.fetchData(); }
         }
     }
 
@@ -544,7 +575,7 @@ window.renderManageLists = function() {
         
         let userHtml = appData['使用者'].map(item => {
             const c = item.color || '#1976d2';
-            const balances = getUserBalance(item.name); 
+            const balances = window.getUserBalance(item.name); 
             const isChecked = activeUsers.includes(item.name);
             
             if (isChecked) {
@@ -626,7 +657,7 @@ window.renderManageLists = function() {
             });
         });
     }
-    updateFormDropdowns(); 
+    window.updateFormDropdowns(); 
 };
 
 window.renderDailyList = function() {
@@ -1186,7 +1217,10 @@ function renderSvgChart(container, xLabels, datasets) {
     container.innerHTML = svg;
 }
 
-window.quickAdd = function(type) {
+// ==========================================
+// 表單操作與 Firestore 資料寫入
+// ==========================================
+window.quickAdd = async function(type) {
     let parentName = '';
     if (type === '小分類') {
         parentName = document.getElementById('mainCategory').value;
@@ -1201,27 +1235,30 @@ window.quickAdd = function(type) {
     if (type === '大分類') icon = prompt(`請為「${newName}」設定一個 Emoji 圖示：\n(例如：🍔、🚗、🎮)`, '🏷️') || '🏷️';
     else if (type === '使用者') color = getRandomColor(); 
     
-    const btn = document.getElementById('submitBtn');
-    btn.innerText = '新增中...'; btn.disabled = true;
-    const payload = { action: 'manage', operation: 'add', type: type, id: Date.now(), name: newName, parentName: parentName, icon: icon, color: color };
+    const id = Date.now().toString();
+    const payload = { type: type, id: id, name: newName, parentName: parentName, icon: icon, color: color };
 
-    fetch(SCRIPT_URL, { method: 'POST', body: JSON.stringify(payload) })
-    .then(res => res.json())
-    .then(res => {
-        if(res.status === 'success') {
-            appData[type].push({id: payload.id, name: payload.name, parentName: payload.parentName, icon: payload.icon, color: payload.color});
-            updateFormDropdowns(); 
-            if (type === '使用者') { 
-                document.getElementById('user').value = payload.name; 
-                document.getElementById('targetUser').value = payload.name; 
-            }
-            if (type === '大分類') { document.getElementById('mainCategory').value = payload.name; updateFormSubCategory(); }
-            if (type === '小分類') document.getElementById('subCategory').value = payload.name;
-            if (type === '專案') document.getElementById('project').value = payload.name;
-            renderManageLists(); 
+    const btn = document.getElementById('submitBtn');
+    const oldText = btn.innerText;
+    btn.innerText = '新增中...'; btn.disabled = true;
+
+    try {
+        await setDoc(doc(db, "manageData", id), payload);
+        appData[type].push(payload);
+        window.updateFormDropdowns(); 
+        if (type === '使用者') { 
+            document.getElementById('user').value = payload.name; 
+            document.getElementById('targetUser').value = payload.name; 
         }
-    })
-    .finally(() => { btn.innerText = document.getElementById('expenseOperation').value === 'edit' ? '儲存修改' : '儲存新增'; btn.disabled = false; });
+        if (type === '大分類') { document.getElementById('mainCategory').value = payload.name; window.updateFormSubCategory(); }
+        if (type === '小分類') document.getElementById('subCategory').value = payload.name;
+        if (type === '專案') document.getElementById('project').value = payload.name;
+        window.renderManageLists(); 
+    } catch(err) {
+        alert("新增分類失敗");
+    } finally {
+        btn.innerText = oldText; btn.disabled = false;
+    }
 }
 
 window.editExpense = function(id) {
@@ -1249,7 +1286,7 @@ window.editExpense = function(id) {
     if(appData['大分類'].find(c => c.name === exp.mainCategory)) mainSel.value = exp.mainCategory;
     else mainSel.value = "";
 
-    updateFormSubCategory();
+    window.updateFormSubCategory();
     let subSel = document.getElementById('subCategory');
     if(appData['小分類'].find(c => c.name === exp.subCategory)) subSel.value = exp.subCategory;
     else subSel.value = "";
@@ -1262,24 +1299,28 @@ window.editExpense = function(id) {
     document.getElementById('addModal').style.display = 'flex';         
 };
 
-window.deleteExpense = function(id) {
+window.deleteExpense = async function(id) {
     if(!confirm('確定要永久刪除這筆明細嗎？')) return;
-    const ledger = document.getElementById('globalLedgerSelect').value;
     
+    // 樂觀更新 UI (讓使用者感覺反應極快)
     validExpenseData = validExpenseData.filter(e => e.id.toString() !== id.toString());
     exceptionExpenseData = exceptionExpenseData.filter(e => e.id.toString() !== id.toString());
+    window.renderDailyList();
+    window.renderChart();
+    window.renderExceptionList();
     
-    renderDailyList();
-    renderChart();
-    renderExceptionList();
-    if (document.getElementById('page-chart-detail').classList.contains('active')) openChartDetail(currentChartDetailLabel);
-    if (document.getElementById('page-compare').classList.contains('active')) renderComparePage();
+    if (document.getElementById('page-chart-detail').classList.contains('active')) window.openChartDetail(currentChartDetailLabel);
+    if (document.getElementById('page-compare').classList.contains('active')) window.renderComparePage();
     
-    fetch(SCRIPT_URL, { method: 'POST', body: JSON.stringify({ action: 'expense', operation: 'delete', id: id, ledgerName: ledger }) })
-        .then(r => r.json()).then(res => { if(res.status === 'success') fetchData(); });
+    try {
+        await deleteDoc(doc(db, "expenses", id.toString()));
+        window.fetchData(); 
+    } catch(err) {
+        alert('刪除失敗');
+    }
 };
 
-document.getElementById('expenseForm').onsubmit = function(e) {
+document.getElementById('expenseForm').onsubmit = async function(e) {
     e.preventDefault();
     const btn = document.getElementById('submitBtn');
     btn.innerText = '處理中...'; btn.disabled = true;
@@ -1287,24 +1328,24 @@ document.getElementById('expenseForm').onsubmit = function(e) {
     const formData = new FormData(this);
     const data = Object.fromEntries(formData.entries());
     
-    data.operation = document.getElementById('expenseOperation').value;
     if (!data.targetUser) data.targetUser = data.user;
-    data.action = 'expense'; 
     data.ledgerName = document.getElementById('globalLedgerSelect').value;
+    const docId = data.id.toString(); 
 
-    fetch(SCRIPT_URL, { method: 'POST', body: JSON.stringify(data) })
-        .then(res => res.json())
-        .then(res => {
-            if(res.status === 'success') {
-                alert(data.operation === 'add' ? '新增成功！' : '修改成功！');
-                document.getElementById('addModal').style.display = 'none';
-                fetchData(); 
-            } else {
-                alert('儲存失敗：' + res.message);
-            }
-        })
-        .catch(err => { alert('網路錯誤或伺服器無回應'); })
-        .finally(() => { btn.innerText = '儲存'; btn.disabled = false; });
+    // 🌟 關鍵修正：將英文的值轉回中文，並把金額轉成真正的「數字」型態
+    data.type = data.type === 'income' ? '收入' : '支出';
+    data.amount = Number(data.amount) || 0;
+
+    try {
+        await setDoc(doc(db, "expenses", docId), data);
+        alert(data.operation === 'add' ? '新增成功！' : '修改成功！');
+        document.getElementById('addModal').style.display = 'none';
+        window.fetchData(); 
+    } catch(err) {
+        alert('儲存失敗：' + err.message);
+    } finally {
+        btn.innerText = '儲存'; btn.disabled = false;
+    }
 };
 
 window.openManageModal = function(operation, type, id = null, currentName = '', parentName = '', currentIcon = '', currentColor = '') {
@@ -1346,40 +1387,43 @@ window.openManageModal = function(operation, type, id = null, currentName = '', 
     document.getElementById('manageItemModal').style.display = 'flex';
 };
 
-window.deleteItem = function(type, id) {
+window.deleteItem = async function(type, id) {
     if(!confirm(`確定要刪除這個${type}嗎？\n(相關明細將會被移動到「異常」分頁！)`)) return;
-    fetch(SCRIPT_URL, { method: 'POST', body: JSON.stringify({ action: 'manage', operation: 'delete', type: type, id: id }) })
-        .then(r => r.json()).then(res => { if(res.status === 'success') fetchData(); });
+    try {
+        await deleteDoc(doc(db, "manageData", id.toString()));
+        window.fetchData();
+    } catch(err) {
+        alert('刪除失敗');
+    }
 };
 
-document.getElementById('manageItemForm').onsubmit = function(e) {
+document.getElementById('manageItemForm').onsubmit = async function(e) {
     e.preventDefault();
     const btn = document.getElementById('manageSubmitBtn');
     btn.innerText = '儲存中...'; btn.disabled = true;
 
     const type = document.getElementById('manageType').value;
     const parentName = type === '小分類' ? document.getElementById('manageParentCatInput').value : "";
-    const icon = document.getElementById('manageIconInput').value.trim();
-    const color = document.getElementById('manageColorInput').value.trim();
+    const id = document.getElementById('manageId').value.toString();
 
     const payload = {
-        action: 'manage', operation: document.getElementById('manageOperation').value,
-        type: type, id: document.getElementById('manageId').value,
-        name: document.getElementById('manageNameInput').value, parentName: parentName, icon: icon, color: color
+        type: type, 
+        id: id,
+        name: document.getElementById('manageNameInput').value, 
+        parentName: parentName, 
+        icon: document.getElementById('manageIconInput').value.trim(), 
+        color: document.getElementById('manageColorInput').value.trim()
     };
 
-    fetch(SCRIPT_URL, { method: 'POST', body: JSON.stringify(payload) })
-        .then(res => res.json())
-        .then(res => {
-            if(res.status === 'success') {
-                document.getElementById('manageItemModal').style.display = 'none';
-                fetchData(); 
-            } else {
-                alert('儲存失敗：' + res.message);
-            }
-        })
-        .catch(err => { alert('網路錯誤或伺服器無回應'); })
-        .finally(() => { btn.innerText = '儲存'; btn.disabled = false; });
+    try {
+        await setDoc(doc(db, "manageData", id), payload);
+        document.getElementById('manageItemModal').style.display = 'none';
+        window.fetchData(); 
+    } catch(err) {
+        alert('儲存失敗：' + err.message);
+    } finally {
+        btn.innerText = '儲存'; btn.disabled = false;
+    }
 };
 
 window.getUserBalance = function(userName) {
@@ -1414,17 +1458,14 @@ window.getUserBalance = function(userName) {
     return { deposit, credit };
 };
 
-let currentAdjustUser = '';
-let currentSysBalances = { deposit: 0, credit: 0 };
-
 window.openAdjustBalanceModal = function(userName) {
     currentAdjustUser = userName;
-    currentSysBalances = getUserBalance(userName);
+    currentSysBalances = window.getUserBalance(userName);
     
     document.getElementById('adjUserName').innerText = userName;
     document.getElementById('adjAccountType').value = '存款'; 
     
-    updateAdjustDisplay();
+    window.updateAdjustDisplay();
     document.getElementById('adjustBalanceModal').style.display = 'flex';
 };
 
@@ -1437,28 +1478,7 @@ window.updateAdjustDisplay = function() {
     document.getElementById('adjDiffDisplay').innerText = '差額: $0 (無需調整)';
 };
 
-document.addEventListener('DOMContentLoaded', () => {
-    const adjInput = document.getElementById('adjActualBalance');
-    if(adjInput) {
-        adjInput.addEventListener('input', function() {
-            let actual = Number(this.value) || 0;
-            let type = document.getElementById('adjAccountType').value;
-            let sysBal = type === '存款' ? currentSysBalances.deposit : currentSysBalances.credit;
-            
-            let diff = actual - sysBal;
-            let display = document.getElementById('adjDiffDisplay');
-            if (diff > 0) {
-                display.innerHTML = `差額: <span style="color:#4CAF50;">+$${diff.toLocaleString()} (系統少算，將新增一筆異常收入)</span>`;
-            } else if (diff < 0) {
-                display.innerHTML = `差額: <span style="color:#ef5350;">-$${Math.abs(diff).toLocaleString()} (系統多算，將新增一筆異常支出)</span>`;
-            } else {
-                display.innerHTML = `差額: $0 (無需調整)`;
-            }
-        });
-    }
-});
-
-window.submitBalanceAdjustment = function() {
+window.submitBalanceAdjustment = async function() {
     let actual = Number(document.getElementById('adjActualBalance').value) || 0;
     let type = document.getElementById('adjAccountType').value;
     let sysBal = type === '存款' ? currentSysBalances.deposit : currentSysBalances.credit;
@@ -1474,13 +1494,13 @@ window.submitBalanceAdjustment = function() {
     btn.innerText = '處理中...'; btn.disabled = true;
 
     const ledger = document.getElementById('globalLedgerSelect') ? document.getElementById('globalLedgerSelect').value : '日常帳本';
-    
+    const id = Date.now().toString();
+
     const data = {
-        action: 'expense',
-        operation: 'add',
-        id: Date.now(),
+        id: id,
         date: formatDate(new Date()),
-        type: diff > 0 ? 'income' : 'expense',
+        // 🌟 關鍵修正：確保這裡存入的是中文的 '收入' 或 '支出'
+        type: diff > 0 ? '收入' : '支出',
         amount: Math.abs(diff),
         payMethod: type, 
         user: currentAdjustUser,
@@ -1492,20 +1512,18 @@ window.submitBalanceAdjustment = function() {
         ledgerName: ledger
     };
 
-    fetch(SCRIPT_URL, { method: 'POST', body: JSON.stringify(data) })
-        .then(res => res.json())
-        .then(res => {
-            if(res.status === 'success') {
-                alert(`已將${type}差額新增至「異常」明細！\n請前往異常分頁補齊分類。`);
-                document.getElementById('adjustBalanceModal').style.display = 'none';
-                fetchData(); 
-            } else {
-                alert('校正失敗：' + res.message);
-            }
-        })
-        .catch(err => { alert('網路錯誤或伺服器無回應'); })
-        .finally(() => { btn.innerText = '確認新增差額'; btn.disabled = false; });
+    try {
+        await setDoc(doc(db, "expenses", id), data);
+        alert(`已將${type}差額新增至「異常」明細！\n請前往異常分頁補齊分類。`);
+        document.getElementById('adjustBalanceModal').style.display = 'none';
+        window.fetchData(); 
+    } catch(err) {
+        alert('校正失敗：' + err.message);
+    } finally {
+        btn.innerText = '確認新增差額'; btn.disabled = false;
+    }
 };
+
 function renderSimpleList(containerId, type, icon) {
     const el = document.getElementById(containerId);
     if(el) {
@@ -1523,6 +1541,7 @@ function renderSimpleList(containerId, type, icon) {
         `).join('');
     }
 }
+
 window.updateFormDropdowns = function() {
     const userSel = document.getElementById('user');
     const targetUserSel = document.getElementById('targetUser');
@@ -1558,12 +1577,7 @@ window.updateFormDropdowns = function() {
         else projectSel.value = '';
     }
 
-    // 更新連動的小分類
-    if (typeof updateFormSubCategory === 'function') {
-        updateFormSubCategory();
-    } else if (typeof window.updateFormSubCategory === 'function') {
-        window.updateFormSubCategory();
-    }
+    window.updateFormSubCategory();
 };
 
 window.updateFormSubCategory = function() {
@@ -1580,5 +1594,67 @@ window.updateFormSubCategory = function() {
         else subSel.value = '';
     } else {
         subSel.innerHTML = `<option value="" disabled selected>無小分類</option>`;
+    }
+};
+
+// ==========================================
+// 臨時功能：從 Google Sheets 搬移資料到 Firebase
+// ==========================================
+window.migrateDataFromGAS = async function() {
+    const OLD_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxAlklJVn9ibCGzpOtSF0JnN3mCGVD5Iaw3aYsDcnNUE_Kn6i27qEgOuBWg5JpOK4xTqA/exec';
+    const ledger = document.getElementById('globalLedgerSelect').value;
+
+    if(!confirm(`確定要重新搬移「${ledger}」的資料，修復日期問題嗎？\n(這將會完美覆寫剛剛日期錯誤的資料)`)) return;
+
+    const btn = document.getElementById('migrateBtn');
+    if(btn) { btn.innerText = "努力修復中...⏳"; btn.disabled = true; }
+
+    try {
+        const r = await fetch(OLD_SCRIPT_URL, { method: 'POST', body: JSON.stringify({ action: "getData", ledgerName: ledger }) });
+        const res = await r.json();
+
+        if (res.status === "error") throw new Error(res.message);
+
+        const manageData = res.manageData || [];
+        const expenseData = res.expenseData || [];
+        const promises = []; 
+
+        for (const item of manageData) {
+            promises.push(setDoc(doc(db, "manageData", item.id.toString()), item));
+        }
+
+        for (const item of expenseData) {
+            item.type = item.type === 'income' ? '收入' : (item.type === 'expense' ? '支出' : item.type);
+            item.amount = Number(item.amount) || 0;
+            
+            // 🌟 關鍵修正：讓 JavaScript 自動將 UTC 時間轉換為你的當地時區
+            if (item.date && String(item.date).includes('T')) {
+                let d = new Date(item.date);
+                if (!isNaN(d.getTime())) {
+                    item.date = formatDate(d); // 使用內建函數轉換出正確的 YYYY-MM-DD
+                } else {
+                    item.date = String(item.date).substring(0, 10);
+                }
+            } else if (item.date) {
+                item.date = String(item.date).substring(0, 10);
+            }
+            
+            item.ledgerName = ledger;
+            if (!item.targetUser) item.targetUser = item.user;
+
+            promises.push(setDoc(doc(db, "expenses", item.id.toString()), item));
+        }
+
+        await Promise.all(promises);
+
+        alert(`🎉 日期修復大成功！\n資料已經回到正確的日期了！`);
+        
+        if(btn) btn.style.display = "none"; 
+        window.fetchData(); // 重新撈取並渲染畫面
+
+    } catch (err) {
+        console.error(err);
+        alert("轉移發生錯誤：" + err.message);
+        if(btn) { btn.innerText = "轉移失敗 ❌"; btn.disabled = false; }
     }
 };

@@ -11,7 +11,11 @@
   <header class="app-header">
     <div class="header-left"><select id="globalLedgerSelect"><option value="日常帳本">日常帳本</option></select></div>
     <div class="header-title" id="headerTitle">日概況</div>
-    <div class="header-right"></div>
+    
+    <!-- 🌟 加入這顆臨時的搬家按鈕 -->
+    <div class="header-right">
+        <button id="migrateBtn" onclick="migrateDataFromGAS()" style="background: #ffcc80; border: none; padding: 5px 10px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 13px; color: #e65100;">📥 一鍵搬移舊資料</button>
+    </div>
   </header>
 
   <main class="app-main">
@@ -220,6 +224,7 @@
     </div>
   </div>
 
-  <script src="script.js"></script>
+  <!-- 改為 type="module" -->
+  <script type="module" src="script.js"></script>
 </body>
 </html>
