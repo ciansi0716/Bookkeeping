@@ -298,7 +298,7 @@ function initUI() {
     const compRangeLabel = document.getElementById('compareRangeLabel');
     const compMonth = document.getElementById('compareMonth');
     const compareShowCheckout = document.getElementById('compareShowCheckout');
-    const compareSplitUser = document.getElementById('compareSplitUser'); // 新增的使用者區分勾選框
+    const compareSplitUser = document.getElementById('compareSplitUser');
 
     if(compareShowCheckout) {
         compareShowCheckout.checked = localStorage.getItem('compareShowCheckout') === 'true';
@@ -1149,7 +1149,8 @@ window.renderComparePage = function() {
 
     let userMap = {}; 
     if (isSplitUser) {
-        let uniqueUsers = [...new Set(expenses.map(e => e.user))];
+        // 🌟 關鍵修改 1：撈取所有出現過的「被使用者」(如果沒有被使用者，則找付款人)
+        let uniqueUsers = [...new Set(expenses.map(e => e.targetUser || e.user))];
         uniqueUsers.forEach(u => userMap[u] = new Array(xLabels.length).fill(0));
     } else {
         userMap['總計支出'] = new Array(xLabels.length).fill(0);
@@ -1157,7 +1158,10 @@ window.renderComparePage = function() {
 
     expenses.forEach(e => {
         if(!e.date) return;
-        let targetArray = isSplitUser ? userMap[e.user] : userMap['總計支出'];
+        
+        // 🌟 關鍵修改 2：將金額計算歸類給「被使用者」
+        let tUser = e.targetUser || e.user;
+        let targetArray = isSplitUser ? userMap[tUser] : userMap['總計支出'];
         if(!targetArray) return;
 
         let p = e.date.split('-');
@@ -1258,16 +1262,17 @@ function renderSvgChart(container, xLabels, datasets) {
             let x = padX + (i / (xLabels.length - 1)) * chartW;
             let y = padY + chartH - (val/maxVal) * chartH;
             svg += `<circle cx="${x}" cy="${y}" r="4" fill="white" stroke="${ds.color}" stroke-width="2" />`;
-            // 如果只有一條線且點數少，才直接把數字寫在圖表上，以免畫面太亂
-            if(datasets.length === 1 && ds.data.length <= 12) { 
-                svg += `<text x="${x}" y="${y-10}" font-size="10" text-anchor="middle" font-weight="bold" fill="#333">$${val.toLocaleString()}</text>`;
+            
+            // 讓文字顯示專屬顏色，並加上白色描邊
+            if(ds.data.length <= 12) { 
+                svg += `<text x="${x}" y="${y-10}" font-size="10" text-anchor="middle" font-weight="bold" fill="${ds.color}" style="text-shadow: 1px 1px 0 #fff, -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff;">$${val.toLocaleString()}</text>`;
             }
         });
     });
 
     svg += `</svg>`;
 
-    // 🌟 如果有兩條線以上（區分使用者），加上顏色圖例
+    // 如果有兩條線以上（區分使用者），加上顏色圖例
     let legendHtml = '';
     if (datasets.length > 1) {
         legendHtml = '<div style="display:flex; justify-content:center; flex-wrap:wrap; gap:12px; margin-top:10px; padding:0 15px;">';
@@ -1365,7 +1370,7 @@ window.editExpense = function(id) {
 window.deleteExpense = async function(id) {
     if(!confirm('確定要永久刪除這筆明細嗎？')) return;
     
-    // 樂觀更新 UI (讓使用者感覺反應極快)
+    // 樂觀更新 UI 
     validExpenseData = validExpenseData.filter(e => e.id.toString() !== id.toString());
     exceptionExpenseData = exceptionExpenseData.filter(e => e.id.toString() !== id.toString());
     window.renderDailyList();
@@ -1660,7 +1665,7 @@ window.updateFormSubCategory = function() {
 
 // ==========================================
 // 臨時功能：從 Google Sheets 搬移資料到 Firebase 
-// (搬移完成後可刪除此段)
+// (搬移完成後可刪除此段與 HTML 的按鈕)
 // ==========================================
 window.migrateDataFromGAS = async function() {
     const OLD_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxAlklJVn9ibCGzpOtSF0JnN3mCGVD5Iaw3aYsDcnNUE_Kn6i27qEgOuBWg5JpOK4xTqA/exec';
