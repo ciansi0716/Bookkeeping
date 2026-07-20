@@ -4,7 +4,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
 
 // ==========================================
-// TODO: 替換為你的 Firebase 專案設定
+// 你的 Firebase 專案設定
 // ==========================================
 const firebaseConfig = {
   apiKey: "AIzaSyCJG8IR8ibUWF1m8-4C9VInA2FXXWSQSJ8",
@@ -55,7 +55,7 @@ window.fetchData = async function() {
     if(list) list.innerHTML = `<div class="empty-state">資料與資料庫同步中...</div>`;
 
     try {
-        // 1. 讀取管理項目 (分類、使用者等)
+        // 1. 讀取管理項目
         const manageSnap = await getDocs(collection(db, "manageData"));
         let manageData = manageSnap.docs.map(d => d.data());
 
@@ -65,7 +65,7 @@ window.fetchData = async function() {
         appData['小分類'] = manageData.filter(d => d.type === '小分類');
         appData['專案'] = manageData.filter(d => d.type === '專案'); 
         
-        // 🌟 自動注入預設分類
+        // 自動注入預設分類
         if (!appData['大分類'].find(c => c.name === '信用卡')) appData['大分類'].push({ id: 'cc_main', name: '信用卡', parentName: '', icon: '💳', color: '' });
         if (!appData['小分類'].find(c => c.name === '繳信用卡')) appData['小分類'].push({ id: 'cc_sub', name: '繳信用卡', parentName: '信用卡', icon: '💳', color: '' });
         if (!appData['大分類'].find(c => c.name === '轉帳')) appData['大分類'].push({ id: 'transfer_main', name: '轉帳', parentName: '', icon: '🔄', color: '' });
@@ -244,6 +244,12 @@ function initUI() {
     const targetUserSel = document.getElementById('chartTargetUserSelect');
     const projectSel = document.getElementById('chartProjectSelect');
     const chartShowCheckout = document.getElementById('chartShowCheckout');
+    
+    // 自訂日期區間的事件綁定
+    const chartStartDate = document.getElementById('chartStartDate');
+    const chartEndDate = document.getElementById('chartEndDate');
+    if(chartStartDate) { chartStartDate.value = formatDate(new Date()); chartStartDate.addEventListener('change', window.renderChart); }
+    if(chartEndDate) { chartEndDate.value = formatDate(new Date()); chartEndDate.addEventListener('change', window.renderChart); }
 
     if(chartShowCheckout) {
         chartShowCheckout.checked = localStorage.getItem('chartShowCheckout') === 'true';
@@ -253,29 +259,37 @@ function initUI() {
         });
     }
 
-    [inOutSel, userSel, targetUserSel, monthSel, projectSel].forEach(el => {
+    [inOutSel, userSel, targetUserSel, projectSel].forEach(el => {
         if(el) el.addEventListener('change', window.renderChart);
     });
 
     if(timeSel) {
         timeSel.addEventListener('change', () => {
             currentChartTime = timeSel.value;
+            const customRange = document.getElementById('chartCustomDateRange');
+            yearSel.style.display = 'none'; 
+            monthSel.style.display = 'none';
+            if(customRange) customRange.style.display = 'none';
+
             if (currentChartTime === '歷年') {
-                yearSel.style.display = 'none'; monthSel.style.display = 'none';
+                // all hidden
             } else if (currentChartTime === '當年') {
-                yearSel.style.display = 'inline-block'; monthSel.style.display = 'none';
-            } else { 
-                yearSel.style.display = 'inline-block'; monthSel.style.display = 'inline-block';
+                yearSel.style.display = 'inline-block';
+            } else if (currentChartTime === '本月') { 
+                yearSel.style.display = 'inline-block'; 
+                monthSel.style.display = 'inline-block';
+            } else if (currentChartTime === '自訂區間') {
+                if(customRange) customRange.style.display = 'flex';
             }
             window.renderChart();
         });
     }
     
     if(yearSel) {
-        yearSel.addEventListener('change', () => {
-            updateChartMonthDropdown();
-            window.renderChart();
-        });
+        yearSel.addEventListener('change', () => { updateChartMonthDropdown(); window.renderChart(); });
+    }
+    if(monthSel) {
+        monthSel.addEventListener('change', window.renderChart);
     }
 
     const compModeSel = document.getElementById('compareModeSelect');
@@ -284,13 +298,15 @@ function initUI() {
     const compRangeLabel = document.getElementById('compareRangeLabel');
     const compMonth = document.getElementById('compareMonth');
     const compareShowCheckout = document.getElementById('compareShowCheckout');
+    const compareSplitUser = document.getElementById('compareSplitUser'); // 新增的使用者區分勾選框
 
     if(compareShowCheckout) {
         compareShowCheckout.checked = localStorage.getItem('compareShowCheckout') === 'true';
-        compareShowCheckout.addEventListener('change', function() {
-            localStorage.setItem('compareShowCheckout', this.checked);
-            window.renderComparePage();
-        });
+        compareShowCheckout.addEventListener('change', function() { localStorage.setItem('compareShowCheckout', this.checked); window.renderComparePage(); });
+    }
+    if(compareSplitUser) {
+        compareSplitUser.checked = localStorage.getItem('compareSplitUser') === 'true';
+        compareSplitUser.addEventListener('change', function() { localStorage.setItem('compareSplitUser', this.checked); window.renderComparePage(); });
     }
 
     if(compModeSel) {
@@ -872,6 +888,15 @@ window.renderChart = function() {
 
     filtered = filtered.filter(e => {
         if(!e.date) return false; 
+        
+        if (currentChartTime === '自訂區間') {
+            const sDate = document.getElementById('chartStartDate').value;
+            const eDate = document.getElementById('chartEndDate').value;
+            if(sDate && e.date < sDate) return false;
+            if(eDate && e.date > eDate) return false;
+            return true;
+        }
+
         let parts = e.date.split('-');
         if (parts.length < 2) return false;
         let y = parts[0], m = parseInt(parts[1], 10);
@@ -1012,6 +1037,15 @@ window.openChartDetail = function(label) {
 
     filtered = filtered.filter(e => {
         if(!e.date) return false; 
+        
+        if (currentChartTime === '自訂區間') {
+            const sDate = document.getElementById('chartStartDate').value;
+            const eDate = document.getElementById('chartEndDate').value;
+            if(sDate && e.date < sDate) return false;
+            if(eDate && e.date > eDate) return false;
+            return true;
+        }
+
         let parts = e.date.split('-');
         if(parts.length < 2) return false;
         let y = parts[0], m = parseInt(parts[1], 10);
@@ -1081,8 +1115,9 @@ window.renderComparePage = function() {
     
     if(!summaryContainer || !chartContainer) return;
 
+    const isSplitUser = document.getElementById('compareSplitUser') ? document.getElementById('compareSplitUser').checked : false;
+
     let xLabels = [];
-    let dataArray = [];
     let cardTitle = "";
     let datasets = [];
 
@@ -1097,70 +1132,83 @@ window.renderComparePage = function() {
         expenses = expenses.filter(e => !isCheckoutRecord(e));
     }
 
+    let uniqueYears = [];
     if (compareMode === 'currentYearMonth') {
         cardTitle = `${baseYearStr}年 月份支出趨勢`;
         xLabels = ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"];
-        dataArray = new Array(12).fill(0);
-        
-        expenses.forEach(e => {
-            if(!e.date) return;
-            let p = e.date.split('-');
-            if(p[0] === baseYearStr) {
-                let mIndex = parseInt(p[1], 10) - 1;
-                dataArray[mIndex] += Number(e.amount);
-            }
-        });
-        datasets.push({ label: '月支出', data: dataArray, color: '#ff9bbb' });
-
     } else if (compareMode === 'year') {
         let sY = Math.min(parseInt(baseYearStr), parseInt(endYearStr));
         let eY = Math.max(parseInt(baseYearStr), parseInt(endYearStr));
         cardTitle = `${sY}年 - ${eY}年 年度總支出`;
         for(let y = sY; y <= eY; y++) xLabels.push(y + "年");
-        dataArray = new Array(xLabels.length).fill(0);
-
-        expenses.forEach(e => {
-            if(!e.date) return;
-            let y = parseInt(e.date.split('-')[0], 10);
-            if(y >= sY && y <= eY) {
-                dataArray[y - sY] += Number(e.amount);
-            }
-        });
-        datasets.push({ label: '年總額', data: dataArray, color: '#2196F3' });
-
     } else if (compareMode === 'month') {
         cardTitle = `歷年 ${month}月 支出比較`;
-        let uniqueYears = Array.from(new Set(validExpenseData.map(e => String(e.date).split('-')[0]))).sort();
+        uniqueYears = Array.from(new Set(validExpenseData.map(e => String(e.date).split('-')[0]))).sort();
         xLabels = uniqueYears.map(y => y + "年");
-        dataArray = new Array(xLabels.length).fill(0);
+    }
 
-        expenses.forEach(e => {
-            if(!e.date) return;
-            let p = e.date.split('-');
-            let y = p[0];
-            let m = parseInt(p[1], 10);
-            if(m === month) {
-                let yIndex = uniqueYears.indexOf(y);
-                if(yIndex !== -1) dataArray[yIndex] += Number(e.amount);
-            }
-        });
-        datasets.push({ label: `${month}月額`, data: dataArray, color: '#4CAF50' });
+    let userMap = {}; 
+    if (isSplitUser) {
+        let uniqueUsers = [...new Set(expenses.map(e => e.user))];
+        uniqueUsers.forEach(u => userMap[u] = new Array(xLabels.length).fill(0));
+    } else {
+        userMap['總計支出'] = new Array(xLabels.length).fill(0);
+    }
+
+    expenses.forEach(e => {
+        if(!e.date) return;
+        let targetArray = isSplitUser ? userMap[e.user] : userMap['總計支出'];
+        if(!targetArray) return;
+
+        let p = e.date.split('-');
+        let y = p[0];
+        let m = parseInt(p[1], 10);
+        
+        let index = -1;
+        if (compareMode === 'currentYearMonth' && y === baseYearStr) {
+            index = m - 1;
+        } else if (compareMode === 'year') {
+            let sY = Math.min(parseInt(baseYearStr), parseInt(endYearStr));
+            let eY = Math.max(parseInt(baseYearStr), parseInt(endYearStr));
+            let eYear = parseInt(y, 10);
+            if(eYear >= sY && eYear <= eY) index = eYear - sY;
+        } else if (compareMode === 'month' && m === month) {
+            index = uniqueYears.indexOf(y);
+        }
+
+        if(index !== -1) {
+            targetArray[index] += Number(e.amount);
+        }
+    });
+
+    let globalTotal = 0;
+    for (const [key, dataArr] of Object.entries(userMap)) {
+        let color = '#2196F3';
+        if (isSplitUser) {
+            let userObj = appData['使用者'].find(u => u.name === key);
+            color = (userObj && userObj.color) ? userObj.color : getRandomColor();
+        } else {
+            if (compareMode === 'currentYearMonth') color = '#ff9bbb';
+            else if (compareMode === 'year') color = '#2196F3';
+            else color = '#4CAF50';
+        }
+        datasets.push({ label: key, data: dataArr, color: color });
+        globalTotal += dataArr.reduce((a, b) => a + b, 0);
     }
 
     renderSvgChart(chartContainer, xLabels, datasets);
 
-    let total = dataArray.reduce((a, b) => a + b, 0);
-    let avg = Math.round(total / (dataArray.filter(v => v > 0).length || 1));
+    let avg = Math.round(globalTotal / Math.max(xLabels.length, 1)); 
     
     summaryContainer.innerHTML = `
         <div class="compare-card">
             <div class="compare-card-title">${cardTitle}</div>
             <div class="compare-row main">
-                <span class="compare-label">總計支出</span>
-                <span class="compare-val-main">$${total.toLocaleString()}</span>
+                <span class="compare-label">圖表總支出</span>
+                <span class="compare-val-main">$${globalTotal.toLocaleString()}</span>
             </div>
             <div class="compare-row">
-                <span class="compare-sub-label">平均每月支出 (有紀錄月份)</span>
+                <span class="compare-sub-label">時間節點平均支出</span>
                 <span class="compare-diff gray">$${avg.toLocaleString()}</span>
             </div>
         </div>
@@ -1175,7 +1223,10 @@ function renderSvgChart(container, xLabels, datasets) {
     const chartW = width - padX * 2;
     const chartH = height - padY * 2;
 
-    let maxVal = Math.max(...datasets[0].data, 100);
+    let allValues = [];
+    datasets.forEach(ds => allValues.push(...ds.data));
+    let maxVal = Math.max(...allValues, 100);
+
     let svg = `<svg width="100%" height="${height}">`;
 
     for(let i=0; i<=4; i++) {
@@ -1207,14 +1258,26 @@ function renderSvgChart(container, xLabels, datasets) {
             let x = padX + (i / (xLabels.length - 1)) * chartW;
             let y = padY + chartH - (val/maxVal) * chartH;
             svg += `<circle cx="${x}" cy="${y}" r="4" fill="white" stroke="${ds.color}" stroke-width="2" />`;
-            if(datasets[0].data.length <= 12) { 
+            // 如果只有一條線且點數少，才直接把數字寫在圖表上，以免畫面太亂
+            if(datasets.length === 1 && ds.data.length <= 12) { 
                 svg += `<text x="${x}" y="${y-10}" font-size="10" text-anchor="middle" font-weight="bold" fill="#333">$${val.toLocaleString()}</text>`;
             }
         });
     });
 
     svg += `</svg>`;
-    container.innerHTML = svg;
+
+    // 🌟 如果有兩條線以上（區分使用者），加上顏色圖例
+    let legendHtml = '';
+    if (datasets.length > 1) {
+        legendHtml = '<div style="display:flex; justify-content:center; flex-wrap:wrap; gap:12px; margin-top:10px; padding:0 15px;">';
+        datasets.forEach(ds => {
+            legendHtml += `<div style="font-size:13px; display:flex; align-items:center; font-weight:bold; color:#555;"><span style="display:inline-block; width:12px; height:12px; background:${ds.color}; border-radius:50%; margin-right:6px;"></span>${ds.label}</div>`;
+        });
+        legendHtml += '</div>';
+    }
+
+    container.innerHTML = svg + legendHtml;
 }
 
 // ==========================================
@@ -1332,7 +1395,6 @@ document.getElementById('expenseForm').onsubmit = async function(e) {
     data.ledgerName = document.getElementById('globalLedgerSelect').value;
     const docId = data.id.toString(); 
 
-    // 🌟 關鍵修正：將英文的值轉回中文，並把金額轉成真正的「數字」型態
     data.type = data.type === 'income' ? '收入' : '支出';
     data.amount = Number(data.amount) || 0;
 
@@ -1499,7 +1561,6 @@ window.submitBalanceAdjustment = async function() {
     const data = {
         id: id,
         date: formatDate(new Date()),
-        // 🌟 關鍵修正：確保這裡存入的是中文的 '收入' 或 '支出'
         type: diff > 0 ? '收入' : '支出',
         amount: Math.abs(diff),
         payMethod: type, 
@@ -1598,7 +1659,8 @@ window.updateFormSubCategory = function() {
 };
 
 // ==========================================
-// 臨時功能：從 Google Sheets 搬移資料到 Firebase
+// 臨時功能：從 Google Sheets 搬移資料到 Firebase 
+// (搬移完成後可刪除此段)
 // ==========================================
 window.migrateDataFromGAS = async function() {
     const OLD_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxAlklJVn9ibCGzpOtSF0JnN3mCGVD5Iaw3aYsDcnNUE_Kn6i27qEgOuBWg5JpOK4xTqA/exec';
@@ -1627,11 +1689,10 @@ window.migrateDataFromGAS = async function() {
             item.type = item.type === 'income' ? '收入' : (item.type === 'expense' ? '支出' : item.type);
             item.amount = Number(item.amount) || 0;
             
-            // 🌟 關鍵修正：讓 JavaScript 自動將 UTC 時間轉換為你的當地時區
             if (item.date && String(item.date).includes('T')) {
                 let d = new Date(item.date);
                 if (!isNaN(d.getTime())) {
-                    item.date = formatDate(d); // 使用內建函數轉換出正確的 YYYY-MM-DD
+                    item.date = formatDate(d); 
                 } else {
                     item.date = String(item.date).substring(0, 10);
                 }
@@ -1650,7 +1711,7 @@ window.migrateDataFromGAS = async function() {
         alert(`🎉 日期修復大成功！\n資料已經回到正確的日期了！`);
         
         if(btn) btn.style.display = "none"; 
-        window.fetchData(); // 重新撈取並渲染畫面
+        window.fetchData(); 
 
     } catch (err) {
         console.error(err);
