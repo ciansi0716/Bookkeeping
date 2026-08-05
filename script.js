@@ -39,6 +39,52 @@ let currentAdjustUser = '';
 let currentSysBalances = { deposit: 0, credit: 0 };
 
 // ==========================================
+// 自訂專案多選下拉選單的邏輯 (全新加入)
+// ==========================================
+window.toggleProjectDropdown = function() {
+    const opts = document.getElementById('projectSelectOptions');
+    opts.style.display = opts.style.display === 'none' ? 'block' : 'none';
+};
+
+window.updateProjectSelectLabel = function() {
+    const checked = Array.from(document.querySelectorAll('.project-checkbox:checked')).map(cb => cb.value);
+    const label = document.getElementById('projectSelectLabel');
+    if (!label) return;
+    if (checked.includes('全專案') || checked.length === 0) {
+        label.innerText = '全專案';
+    } else {
+        label.innerText = checked.join(', ');
+    }
+};
+
+window.getSelectedProjects = function() {
+    const checked = Array.from(document.querySelectorAll('.project-checkbox:checked')).map(cb => cb.value);
+    if (checked.length === 0) return ['全專案'];
+    return checked;
+};
+
+window.onProjectCheckboxChange = function(checkbox) {
+    const val = checkbox.value;
+    const allCheckboxes = document.querySelectorAll('.project-checkbox');
+    
+    // 排他邏輯：「全專案」與其他選項互斥
+    if (val === '全專案' && checkbox.checked) {
+        allCheckboxes.forEach(cb => { if(cb.value !== '全專案') cb.checked = false; });
+    } else if (checkbox.checked) {
+        allCheckboxes.forEach(cb => { if(cb.value === '全專案') cb.checked = false; });
+    }
+    
+    // 如果把所有選項都取消勾選，自動跳回全專案
+    let anyChecked = Array.from(allCheckboxes).some(cb => cb.checked);
+    if (!anyChecked) {
+        allCheckboxes.forEach(cb => { if(cb.value === '全專案') cb.checked = true; });
+    }
+
+    window.updateProjectSelectLabel();
+    window.renderChart();
+};
+
+// ==========================================
 // 系統啟動與資料讀取
 // ==========================================
 document.addEventListener('DOMContentLoaded', function() {
@@ -55,7 +101,6 @@ window.fetchData = async function() {
     if(list) list.innerHTML = `<div class="empty-state">資料與資料庫同步中...</div>`;
 
     try {
-        // 1. 讀取管理項目
         const manageSnap = await getDocs(collection(db, "manageData"));
         let manageData = manageSnap.docs.map(d => d.data());
 
@@ -73,7 +118,6 @@ window.fetchData = async function() {
         if (!appData['大分類'].find(c => c.name === '結帳')) appData['大分類'].push({ id: 'chk_main', name: '結帳', parentName: '', icon: '📝', color: '' });
         if (!appData['小分類'].find(c => c.name === '結帳')) appData['小分類'].push({ id: 'chk_sub', name: '結帳', parentName: '結帳', icon: '📝', color: '' });
 
-        // 2. 讀取記帳明細
         const q = query(collection(db, "expenses"), where("ledgerName", "==", ledger));
         const expenseSnap = await getDocs(q);
         let rawExpenses = expenseSnap.docs.map(d => d.data());
@@ -98,7 +142,6 @@ window.fetchData = async function() {
             else { validExpenseData.push(e); }
         });
         
-        // 渲染畫面
         window.renderManageLists();
         updateChartDropdowns(); 
         initCompareDropdowns(); 
@@ -242,7 +285,6 @@ function initUI() {
     const monthSel = document.getElementById('chartMonthSelect');
     const userSel = document.getElementById('chartUserSelect');
     const targetUserSel = document.getElementById('chartTargetUserSelect');
-    const projectSel = document.getElementById('chartProjectSelect');
     const chartShowCheckout = document.getElementById('chartShowCheckout');
     
     // 自訂日期區間的事件綁定
@@ -259,7 +301,7 @@ function initUI() {
         });
     }
 
-    [inOutSel, userSel, targetUserSel, projectSel].forEach(el => {
+    [inOutSel, userSel, targetUserSel].forEach(el => {
         if(el) el.addEventListener('change', window.renderChart);
     });
 
@@ -340,7 +382,17 @@ function initUI() {
     };
     
     document.getElementById('closeModalBtn').onclick = () => document.getElementById('addModal').style.display = 'none';
-    window.onclick = function(e) { if (e.target.className === 'modal') e.target.style.display = 'none'; };
+    
+    // 全域點擊監聽 (關閉 Modal 與自訂下拉選單)
+    window.onclick = function(e) { 
+        if (e.target.className === 'modal') e.target.style.display = 'none'; 
+
+        const customProjectSelect = document.getElementById('customProjectSelect');
+        if (customProjectSelect && !customProjectSelect.contains(e.target)) {
+            const opts = document.getElementById('projectSelectOptions');
+            if (opts) opts.style.display = 'none';
+        }
+    };
 
     const globalSel = document.getElementById('globalLedgerSelect');
     if(globalSel) globalSel.addEventListener('change', window.fetchData);
@@ -420,9 +472,8 @@ function updateChartDropdowns() {
     const ms = document.getElementById('chartMonthSelect');
     const userSel = document.getElementById('chartUserSelect');
     const targetUserSel = document.getElementById('chartTargetUserSelect');
-    const projectSel = document.getElementById('chartProjectSelect');
     
-    if(!ys || !ms || !userSel || !targetUserSel || !projectSel) return;
+    if(!ys || !ms || !userSel || !targetUserSel) return;
 
     const currentSelectedUser = userSel.value || '全付款人';
     let uniqueUsers = new Set();
@@ -438,12 +489,41 @@ function updateChartDropdowns() {
     Array.from(uniqueTargets).sort().forEach(u => targetUserSel.innerHTML += `<option value="${u}">${u}</option>`);
     if (uniqueTargets.has(currentSelectedTarget)) targetUserSel.value = currentSelectedTarget; else targetUserSel.value = '全被使用者';
 
-    const currentSelectedProject = projectSel.value || '全專案';
+    // 🌟 處理自訂的專案多選框
+    let currentSelectedProjects = [];
+    if (document.querySelectorAll('.project-checkbox').length > 0) {
+        currentSelectedProjects = window.getSelectedProjects();
+    } else {
+        currentSelectedProjects = ['全專案'];
+    }
+
     let uniqueProjects = new Set();
     validExpenseData.forEach(e => { if(e.project) uniqueProjects.add(e.project); });
-    projectSel.innerHTML = `<option value="全專案">全專案</option>`;
-    Array.from(uniqueProjects).sort().forEach(p => projectSel.innerHTML += `<option value="${p}">${p}</option>`);
-    if (uniqueProjects.has(currentSelectedProject)) projectSel.value = currentSelectedProject; else projectSel.value = '全專案';
+    
+    let optionsHtml = '';
+    
+    let isAllChecked = currentSelectedProjects.includes('全專案') ? 'checked' : '';
+    optionsHtml += `<label style="display:flex; align-items:center; padding: 8px 10px; cursor:pointer; border-bottom: 1px solid #eee; font-size: 14px;">
+        <input type="checkbox" class="project-checkbox" value="全專案" onchange="onProjectCheckboxChange(this)" style="width:16px; height:16px; margin-right:8px; cursor:pointer;" ${isAllChecked}> <span style="flex:1;">全專案</span>
+    </label>`;
+    
+    let isNoneChecked = currentSelectedProjects.includes('無專案') ? 'checked' : '';
+    optionsHtml += `<label style="display:flex; align-items:center; padding: 8px 10px; cursor:pointer; border-bottom: 1px solid #eee; font-size: 14px;">
+        <input type="checkbox" class="project-checkbox" value="無專案" onchange="onProjectCheckboxChange(this)" style="width:16px; height:16px; margin-right:8px; cursor:pointer;" ${isNoneChecked}> <span style="flex:1;">無專案</span>
+    </label>`;
+    
+    Array.from(uniqueProjects).sort().forEach(p => {
+        let isChecked = currentSelectedProjects.includes(p) ? 'checked' : '';
+        optionsHtml += `<label style="display:flex; align-items:center; padding: 8px 10px; cursor:pointer; border-bottom: 1px solid #eee; font-size: 14px;">
+            <input type="checkbox" class="project-checkbox" value="${p}" onchange="onProjectCheckboxChange(this)" style="width:16px; height:16px; margin-right:8px; cursor:pointer;" ${isChecked}> <span style="flex:1;">${p}</span>
+        </label>`;
+    });
+
+    const optsContainer = document.getElementById('projectSelectOptions');
+    if (optsContainer) {
+        optsContainer.innerHTML = optionsHtml;
+        window.updateProjectSelectLabel();
+    }
 
     let uniqueYears = new Set();
     validExpenseData.forEach(e => {
@@ -848,17 +928,18 @@ window.renderChart = function() {
     const msEl = document.getElementById('chartMonthSelect');
     const userSel = document.getElementById('chartUserSelect');
     const targetUserSel = document.getElementById('chartTargetUserSelect');
-    const projectSel = document.getElementById('chartProjectSelect');
     
-    if(!container || !inOutSel || !timeSel || !ysEl || !msEl || !userSel || !targetUserSel || !projectSel) return;
+    if(!container || !inOutSel) return;
 
     const currentChartInOut = inOutSel.value;
     const currentChartTime = timeSel.value;
-    const ys = ysEl.value;
-    const ms = msEl.value;
-    const selectedUser = userSel.value;
-    const selectedTargetUser = targetUserSel.value;
-    const selectedProject = projectSel.value;
+    const ys = ysEl ? ysEl.value : '';
+    const ms = msEl ? msEl.value : '';
+    const selectedUser = userSel ? userSel.value : '全付款人';
+    const selectedTargetUser = targetUserSel ? targetUserSel.value : '全被使用者';
+    
+    // 🌟 從自訂下拉選單讀取勾選了哪些專案
+    const selectedProjects = window.getSelectedProjects();
     
     let filtered = validExpenseData;
     
@@ -882,8 +963,14 @@ window.renderChart = function() {
             return String(tUser).trim() === String(selectedTargetUser).trim();
         });
     }
-    if (selectedProject && selectedProject !== '全專案') {
-        filtered = filtered.filter(e => String(e.project || '').trim() === String(selectedProject).trim());
+    
+    // 🌟 支援多選專案與無專案過濾
+    if (selectedProjects.length > 0 && !selectedProjects.includes('全專案')) {
+        filtered = filtered.filter(e => {
+            let p = String(e.project || '').trim();
+            if (selectedProjects.includes('無專案') && p === '') return true;
+            return selectedProjects.includes(p);
+        });
     }
 
     filtered = filtered.filter(e => {
@@ -937,7 +1024,9 @@ window.renderChart = function() {
     const summaryEl = document.getElementById('chartSummaryText');
     
     let prefixArr = [];
-    if (selectedProject !== '全專案') prefixArr.push(`【${selectedProject}】`);
+    if (selectedProjects.length > 0 && !selectedProjects.includes('全專案')) {
+        prefixArr.push(`【${selectedProjects.join(' + ')}】`);
+    }
     if (selectedUser !== '全付款人') prefixArr.push(`[${selectedUser}]`);
     let prefixStr = prefixArr.length > 0 ? prefixArr.join('') + ' ' : '';
 
@@ -1007,7 +1096,9 @@ window.openChartDetail = function(label) {
     const ms = document.getElementById('chartMonthSelect').value;
     const selectedUser = document.getElementById('chartUserSelect').value;
     const selectedTargetUser = document.getElementById('chartTargetUserSelect').value;
-    const selectedProject = document.getElementById('chartProjectSelect').value;
+    
+    // 🌟 從自訂下拉選單讀取勾選了哪些專案
+    const selectedProjects = window.getSelectedProjects();
     
     let filtered = validExpenseData;
     
@@ -1031,8 +1122,14 @@ window.openChartDetail = function(label) {
             return String(tUser).trim() === String(selectedTargetUser).trim();
         });
     }
-    if (selectedProject && selectedProject !== '全專案') {
-        filtered = filtered.filter(e => String(e.project || '').trim() === String(selectedProject).trim());
+    
+    // 🌟 支援多選專案與無專案過濾 (明細頁面)
+    if (selectedProjects.length > 0 && !selectedProjects.includes('全專案')) {
+        filtered = filtered.filter(e => {
+            let p = String(e.project || '').trim();
+            if (selectedProjects.includes('無專案') && p === '') return true;
+            return selectedProjects.includes(p);
+        });
     }
 
     filtered = filtered.filter(e => {
@@ -1149,7 +1246,6 @@ window.renderComparePage = function() {
 
     let userMap = {}; 
     if (isSplitUser) {
-        // 🌟 關鍵修改 1：撈取所有出現過的「被使用者」(如果沒有被使用者，則找付款人)
         let uniqueUsers = [...new Set(expenses.map(e => e.targetUser || e.user))];
         uniqueUsers.forEach(u => userMap[u] = new Array(xLabels.length).fill(0));
     } else {
@@ -1159,7 +1255,6 @@ window.renderComparePage = function() {
     expenses.forEach(e => {
         if(!e.date) return;
         
-        // 🌟 關鍵修改 2：將金額計算歸類給「被使用者」
         let tUser = e.targetUser || e.user;
         let targetArray = isSplitUser ? userMap[tUser] : userMap['總計支出'];
         if(!targetArray) return;
@@ -1263,7 +1358,6 @@ function renderSvgChart(container, xLabels, datasets) {
             let y = padY + chartH - (val/maxVal) * chartH;
             svg += `<circle cx="${x}" cy="${y}" r="4" fill="white" stroke="${ds.color}" stroke-width="2" />`;
             
-            // 讓文字顯示專屬顏色，並加上白色描邊
             if(ds.data.length <= 12) { 
                 svg += `<text x="${x}" y="${y-10}" font-size="10" text-anchor="middle" font-weight="bold" fill="${ds.color}" style="text-shadow: 1px 1px 0 #fff, -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff;">$${val.toLocaleString()}</text>`;
             }
@@ -1272,7 +1366,6 @@ function renderSvgChart(container, xLabels, datasets) {
 
     svg += `</svg>`;
 
-    // 如果有兩條線以上（區分使用者），加上顏色圖例
     let legendHtml = '';
     if (datasets.length > 1) {
         legendHtml = '<div style="display:flex; justify-content:center; flex-wrap:wrap; gap:12px; margin-top:10px; padding:0 15px;">';
@@ -1370,7 +1463,6 @@ window.editExpense = function(id) {
 window.deleteExpense = async function(id) {
     if(!confirm('確定要永久刪除這筆明細嗎？')) return;
     
-    // 樂觀更新 UI 
     validExpenseData = validExpenseData.filter(e => e.id.toString() !== id.toString());
     exceptionExpenseData = exceptionExpenseData.filter(e => e.id.toString() !== id.toString());
     window.renderDailyList();
@@ -1637,6 +1729,7 @@ window.updateFormDropdowns = function() {
         else mainSel.value = '';
     }
 
+    // 這裡的是「新增記帳明細」的下拉選單，維持原本的單選
     if(projectSel) {
         projectSel.innerHTML = `<option value="">無</option>` + appData['專案'].map(i => `<option value="${i.name}">${i.name}</option>`).join('');
         if (curProject && appData['專案'].find(p => p.name === curProject)) projectSel.value = curProject;
@@ -1663,10 +1756,6 @@ window.updateFormSubCategory = function() {
     }
 };
 
-// ==========================================
-// 臨時功能：從 Google Sheets 搬移資料到 Firebase 
-// (搬移完成後可刪除此段與 HTML 的按鈕)
-// ==========================================
 window.migrateDataFromGAS = async function() {
     const OLD_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxAlklJVn9ibCGzpOtSF0JnN3mCGVD5Iaw3aYsDcnNUE_Kn6i27qEgOuBWg5JpOK4xTqA/exec';
     const ledger = document.getElementById('globalLedgerSelect').value;
