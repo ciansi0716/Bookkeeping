@@ -39,7 +39,159 @@ let currentAdjustUser = '';
 let currentSysBalances = { deposit: 0, credit: 0 };
 
 // ==========================================
-// 自訂專案多選下拉選單的邏輯 (全新加入)
+// CSV 匯出 / 匯入邏輯
+// ==========================================
+window.exportDataToCSV = function() {
+    const allExpenses = [...validExpenseData, ...exceptionExpenseData];
+    if(allExpenses.length === 0) {
+        alert('目前帳本沒有任何明細可供匯出！');
+        return;
+    }
+
+    const headers = ['id', 'date', 'type', 'amount', 'payMethod', 'user', 'targetUser', 'mainCategory', 'subCategory', 'project', 'content', 'ledgerName'];
+    const csvRows = [];
+    csvRows.push(headers.join(','));
+
+    allExpenses.forEach(e => {
+        const row = headers.map(header => {
+            let val = e[header] !== undefined ? String(e[header]) : '';
+            if (val.includes(',') || val.includes('"') || val.includes('\n') || val.includes('\r')) {
+                val = `"${val.replace(/"/g, '""')}"`;
+            }
+            return val;
+        });
+        csvRows.push(row.join(','));
+    });
+
+    const csvString = '\uFEFF' + csvRows.join('\n');
+    const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    
+    const ledgerName = document.getElementById('globalLedgerSelect').value || '記帳資料';
+    link.setAttribute('download', `${ledgerName}_${formatDate(new Date())}.csv`);
+    
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+};
+
+function parseCSV(text) {
+    let result = [];
+    let row = [];
+    let cur = '';
+    let inQuotes = false;
+    for (let i = 0; i < text.length; i++) {
+        let char = text[i];
+        let nextChar = text[i+1];
+        
+        if (inQuotes) {
+            if (char === '"' && nextChar === '"') {
+                cur += '"';
+                i++;
+            } else if (char === '"') {
+                inQuotes = false;
+            } else {
+                cur += char;
+            }
+        } else {
+            if (char === '"') {
+                inQuotes = true;
+            } else if (char === ',') {
+                row.push(cur);
+                cur = '';
+            } else if (char === '\n' || (char === '\r' && nextChar === '\n')) {
+                if (char === '\r') i++;
+                row.push(cur);
+                result.push(row);
+                row = [];
+                cur = '';
+            } else {
+                cur += char;
+            }
+        }
+    }
+    if (cur || text[text.length-1] === ',' || text[text.length-1] === '"') {
+        row.push(cur);
+    }
+    if (row.length > 0) result.push(row);
+    return result;
+}
+
+window.importDataFromCSV = async function(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    if(!confirm(`確定要匯入「${file.name}」的資料嗎？\n(若有重複的資料 ID 將會被覆蓋更新)`)) {
+        event.target.value = '';
+        return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = async function(e) {
+        const text = e.target.result;
+        const rows = parseCSV(text);
+        
+        if (rows.length <= 1) {
+            alert('檔案是空的或格式錯誤！');
+            event.target.value = '';
+            return;
+        }
+
+        let headers = rows[0].map(h => h.trim());
+        if (headers[0].charCodeAt(0) === 0xFEFF) {
+            headers[0] = headers[0].slice(1);
+        }
+
+        const requiredHeaders = ['id', 'date', 'type', 'amount', 'payMethod', 'user', 'mainCategory', 'subCategory'];
+        const missingHeaders = requiredHeaders.filter(rh => !headers.includes(rh));
+        if (missingHeaders.length > 0) {
+            alert(`CSV 檔案缺少必要欄位：${missingHeaders.join(', ')}`);
+            event.target.value = '';
+            return;
+        }
+
+        const btn = document.getElementById('importBtn');
+        const originalText = btn.innerText;
+        btn.innerText = "匯入中...⏳"; btn.disabled = true;
+
+        try {
+            const promises = [];
+            for (let i = 1; i < rows.length; i++) {
+                const cols = rows[i];
+                if (cols.length === 1 && cols[0] === '') continue;
+
+                const item = {};
+                headers.forEach((h, index) => {
+                    item[h] = cols[index] !== undefined ? cols[index] : '';
+                });
+
+                if (!item.id || !item.date) continue; 
+                
+                item.amount = Number(item.amount) || 0;
+                if (!item.targetUser) item.targetUser = item.user;
+                if (!item.ledgerName) item.ledgerName = document.getElementById('globalLedgerSelect').value;
+
+                promises.push(setDoc(doc(db, "expenses", String(item.id)), item));
+            }
+
+            await Promise.all(promises);
+            alert(`🎉 成功匯入 ${promises.length} 筆資料！`);
+            window.fetchData(); 
+        } catch (err) {
+            console.error(err);
+            alert("匯入發生錯誤：" + err.message);
+        } finally {
+            btn.innerText = originalText; btn.disabled = false;
+            event.target.value = ''; 
+        }
+    };
+    reader.readAsText(file);
+};
+
+// ==========================================
+// 自訂專案多選下拉選單邏輯
 // ==========================================
 window.toggleProjectDropdown = function() {
     const opts = document.getElementById('projectSelectOptions');
@@ -67,21 +219,104 @@ window.onProjectCheckboxChange = function(checkbox) {
     const val = checkbox.value;
     const allCheckboxes = document.querySelectorAll('.project-checkbox');
     
-    // 排他邏輯：「全專案」與其他選項互斥
     if (val === '全專案' && checkbox.checked) {
         allCheckboxes.forEach(cb => { if(cb.value !== '全專案') cb.checked = false; });
     } else if (checkbox.checked) {
         allCheckboxes.forEach(cb => { if(cb.value === '全專案') cb.checked = false; });
     }
     
-    // 如果把所有選項都取消勾選，自動跳回全專案
     let anyChecked = Array.from(allCheckboxes).some(cb => cb.checked);
     if (!anyChecked) {
         allCheckboxes.forEach(cb => { if(cb.value === '全專案') cb.checked = true; });
     }
-
     window.updateProjectSelectLabel();
     window.renderChart();
+};
+
+// ==========================================
+// 統計頁：被使用者多選下拉選單邏輯
+// ==========================================
+window.toggleChartTargetDropdown = function() {
+    const opts = document.getElementById('chartTargetSelectOptions');
+    opts.style.display = opts.style.display === 'none' ? 'block' : 'none';
+};
+
+window.updateChartTargetSelectLabel = function() {
+    const checked = Array.from(document.querySelectorAll('.chart-target-checkbox:checked')).map(cb => cb.value);
+    const label = document.getElementById('chartTargetSelectLabel');
+    if (!label) return;
+    if (checked.includes('全被使用者') || checked.length === 0) {
+        label.innerText = '全被使用者';
+    } else {
+        label.innerText = checked.join(', ');
+    }
+};
+
+window.getSelectedChartTargets = function() {
+    const checked = Array.from(document.querySelectorAll('.chart-target-checkbox:checked')).map(cb => cb.value);
+    if (checked.length === 0) return ['全被使用者'];
+    return checked;
+};
+
+window.onChartTargetCheckboxChange = function(checkbox) {
+    const val = checkbox.value;
+    const allCheckboxes = document.querySelectorAll('.chart-target-checkbox');
+    
+    if (val === '全被使用者' && checkbox.checked) {
+        allCheckboxes.forEach(cb => { if(cb.value !== '全被使用者') cb.checked = false; });
+    } else if (checkbox.checked) {
+        allCheckboxes.forEach(cb => { if(cb.value === '全被使用者') cb.checked = false; });
+    }
+    
+    let anyChecked = Array.from(allCheckboxes).some(cb => cb.checked);
+    if (!anyChecked) {
+        allCheckboxes.forEach(cb => { if(cb.value === '全被使用者') cb.checked = true; });
+    }
+    window.updateChartTargetSelectLabel();
+    window.renderChart();
+};
+
+// ==========================================
+// 比較頁：區分使用者多選下拉選單邏輯
+// ==========================================
+window.toggleCompareUserDropdown = function() {
+    const opts = document.getElementById('compareUserSelectOptions');
+    opts.style.display = opts.style.display === 'none' ? 'block' : 'none';
+};
+
+window.updateCompareUserSelectLabel = function() {
+    const checked = Array.from(document.querySelectorAll('.compare-user-checkbox:checked')).map(cb => cb.value);
+    const label = document.getElementById('compareUserSelectLabel');
+    if (!label) return;
+    if (checked.includes('總和 (不區分)') || checked.length === 0) {
+        label.innerText = '總和 (不區分)';
+    } else {
+        label.innerText = checked.join(', ');
+    }
+};
+
+window.getSelectedCompareUsers = function() {
+    const checked = Array.from(document.querySelectorAll('.compare-user-checkbox:checked')).map(cb => cb.value);
+    if (checked.length === 0) return ['總和 (不區分)'];
+    return checked;
+};
+
+window.onCompareUserCheckboxChange = function(checkbox) {
+    const val = checkbox.value;
+    const allCheckboxes = document.querySelectorAll('.compare-user-checkbox');
+    
+    if (val === '總和 (不區分)' && checkbox.checked) {
+        allCheckboxes.forEach(cb => { if(cb.value !== '總和 (不區分)') cb.checked = false; });
+    } else if (checkbox.checked) {
+        allCheckboxes.forEach(cb => { if(cb.value === '總和 (不區分)') cb.checked = false; });
+    }
+    
+    let anyChecked = Array.from(allCheckboxes).some(cb => cb.checked);
+    if (!anyChecked) {
+        allCheckboxes.forEach(cb => { if(cb.value === '總和 (不區分)') cb.checked = true; });
+    }
+    window.updateCompareUserSelectLabel();
+    window.renderComparePage();
 };
 
 // ==========================================
@@ -110,7 +345,6 @@ window.fetchData = async function() {
         appData['小分類'] = manageData.filter(d => d.type === '小分類');
         appData['專案'] = manageData.filter(d => d.type === '專案'); 
         
-        // 自動注入預設分類
         if (!appData['大分類'].find(c => c.name === '信用卡')) appData['大分類'].push({ id: 'cc_main', name: '信用卡', parentName: '', icon: '💳', color: '' });
         if (!appData['小分類'].find(c => c.name === '繳信用卡')) appData['小分類'].push({ id: 'cc_sub', name: '繳信用卡', parentName: '信用卡', icon: '💳', color: '' });
         if (!appData['大分類'].find(c => c.name === '轉帳')) appData['大分類'].push({ id: 'transfer_main', name: '轉帳', parentName: '', icon: '🔄', color: '' });
@@ -177,6 +411,15 @@ function formatDate(d) {
     return [year, month, day].join('-');
 }
 
+window.formatSlashDate = function(dateStr) {
+    if (!dateStr) return '';
+    let parts = dateStr.split('-');
+    if (parts.length === 3) {
+        return `${parts[0]}/${parseInt(parts[1], 10)}/${parseInt(parts[2], 10)}`;
+    }
+    return dateStr;
+};
+
 function getRandomColor() {
     const letters = '0123456789ABCDEF';
     let color = '#';
@@ -218,8 +461,10 @@ function isCheckoutRecord(e) {
 function getExceptionReason(exp) {
     let reasons = [];
     if (!appData['使用者'].find(u => u.name === exp.user)) reasons.push("付款人");
-    let tUser = exp.targetUser || exp.user;
-    if (!appData['使用者'].find(u => u.name === tUser)) reasons.push("被使用者");
+    
+    let tUsers = (exp.targetUser || exp.user).split(',').map(x=>x.trim()).filter(x=>x);
+    let invalidTarget = tUsers.find(tu => !appData['使用者'].find(u => u.name === tu));
+    if (invalidTarget) reasons.push("被使用者");
     
     if (String(exp.mainCategory || '').includes('校正') && String(exp.subCategory || '') === '未選擇小項目') return "請為手動校正差額選擇正確的分類";
 
@@ -284,10 +529,9 @@ function initUI() {
     const yearSel = document.getElementById('chartYearSelect');
     const monthSel = document.getElementById('chartMonthSelect');
     const userSel = document.getElementById('chartUserSelect');
-    const targetUserSel = document.getElementById('chartTargetUserSelect');
     const chartShowCheckout = document.getElementById('chartShowCheckout');
+    const chartShowTransfer = document.getElementById('chartShowTransfer');
     
-    // 自訂日期區間的事件綁定
     const chartStartDate = document.getElementById('chartStartDate');
     const chartEndDate = document.getElementById('chartEndDate');
     if(chartStartDate) { chartStartDate.value = formatDate(new Date()); chartStartDate.addEventListener('change', window.renderChart); }
@@ -300,8 +544,16 @@ function initUI() {
             window.renderChart();
         });
     }
+    
+    if(chartShowTransfer) {
+        chartShowTransfer.checked = localStorage.getItem('chartShowTransfer') === 'true';
+        chartShowTransfer.addEventListener('change', function() {
+            localStorage.setItem('chartShowTransfer', this.checked);
+            window.renderChart();
+        });
+    }
 
-    [inOutSel, userSel, targetUserSel].forEach(el => {
+    [inOutSel, userSel].forEach(el => {
         if(el) el.addEventListener('change', window.renderChart);
     });
 
@@ -314,7 +566,6 @@ function initUI() {
             if(customRange) customRange.style.display = 'none';
 
             if (currentChartTime === '歷年') {
-                // all hidden
             } else if (currentChartTime === '當年') {
                 yearSel.style.display = 'inline-block';
             } else if (currentChartTime === '本月') { 
@@ -340,15 +591,10 @@ function initUI() {
     const compRangeLabel = document.getElementById('compareRangeLabel');
     const compMonth = document.getElementById('compareMonth');
     const compareShowCheckout = document.getElementById('compareShowCheckout');
-    const compareSplitUser = document.getElementById('compareSplitUser');
 
     if(compareShowCheckout) {
         compareShowCheckout.checked = localStorage.getItem('compareShowCheckout') === 'true';
         compareShowCheckout.addEventListener('change', function() { localStorage.setItem('compareShowCheckout', this.checked); window.renderComparePage(); });
-    }
-    if(compareSplitUser) {
-        compareSplitUser.checked = localStorage.getItem('compareSplitUser') === 'true';
-        compareSplitUser.addEventListener('change', function() { localStorage.setItem('compareSplitUser', this.checked); window.renderComparePage(); });
     }
 
     if(compModeSel) {
@@ -365,9 +611,10 @@ function initUI() {
     });
 
     const addModalUserSel = document.getElementById('user');
-    const addModalTargetSel = document.getElementById('targetUser');
-    if (addModalUserSel && addModalTargetSel) {
-        addModalUserSel.addEventListener('change', function() { addModalTargetSel.value = this.value; });
+    if (addModalUserSel) {
+        addModalUserSel.addEventListener('change', function() {
+            document.getElementById('targetUser').value = this.value;
+        });
     }
 
     document.getElementById('fabAddBtn').onclick = () => {
@@ -383,7 +630,6 @@ function initUI() {
     
     document.getElementById('closeModalBtn').onclick = () => document.getElementById('addModal').style.display = 'none';
     
-    // 全域點擊監聽 (關閉 Modal 與自訂下拉選單)
     window.onclick = function(e) { 
         if (e.target.className === 'modal') e.target.style.display = 'none'; 
 
@@ -391,6 +637,18 @@ function initUI() {
         if (customProjectSelect && !customProjectSelect.contains(e.target)) {
             const opts = document.getElementById('projectSelectOptions');
             if (opts) opts.style.display = 'none';
+        }
+        
+        const customChartTargetSelect = document.getElementById('customChartTargetSelect');
+        if (customChartTargetSelect && !customChartTargetSelect.contains(e.target)) {
+            const optsTarget = document.getElementById('chartTargetSelectOptions');
+            if (optsTarget) optsTarget.style.display = 'none';
+        }
+
+        const customCompareUserSelect = document.getElementById('customCompareUserSelect');
+        if (customCompareUserSelect && !customCompareUserSelect.contains(e.target)) {
+            const optsComp = document.getElementById('compareUserSelectOptions');
+            if (optsComp) optsComp.style.display = 'none';
         }
     };
 
@@ -471,9 +729,8 @@ function updateChartDropdowns() {
     const ys = document.getElementById('chartYearSelect');
     const ms = document.getElementById('chartMonthSelect');
     const userSel = document.getElementById('chartUserSelect');
-    const targetUserSel = document.getElementById('chartTargetUserSelect');
     
-    if(!ys || !ms || !userSel || !targetUserSel) return;
+    if(!ys || !ms || !userSel) return;
 
     const currentSelectedUser = userSel.value || '全付款人';
     let uniqueUsers = new Set();
@@ -482,14 +739,64 @@ function updateChartDropdowns() {
     Array.from(uniqueUsers).sort().forEach(u => userSel.innerHTML += `<option value="${u}">${u}</option>`);
     if (uniqueUsers.has(currentSelectedUser)) userSel.value = currentSelectedUser; else userSel.value = '全付款人';
 
-    const currentSelectedTarget = targetUserSel.value || '全被使用者';
-    let uniqueTargets = new Set();
-    validExpenseData.forEach(e => { let t = e.targetUser || e.user; if(t) uniqueTargets.add(t); });
-    targetUserSel.innerHTML = `<option value="全被使用者">全被使用者</option>`;
-    Array.from(uniqueTargets).sort().forEach(u => targetUserSel.innerHTML += `<option value="${u}">${u}</option>`);
-    if (uniqueTargets.has(currentSelectedTarget)) targetUserSel.value = currentSelectedTarget; else targetUserSel.value = '全被使用者';
+    let currentSelectedTargets = [];
+    if (document.querySelectorAll('.chart-target-checkbox').length > 0) {
+        currentSelectedTargets = window.getSelectedChartTargets();
+    } else {
+        currentSelectedTargets = ['全被使用者'];
+    }
 
-    // 🌟 處理自訂的專案多選框
+    let uniqueTargets = new Set();
+    validExpenseData.forEach(e => { 
+        let t = e.targetUser || e.user; 
+        t.split(',').forEach(tu => uniqueTargets.add(tu.trim()));
+    });
+    
+    let targetOptionsHtml = '';
+    let isAllTargetChecked = currentSelectedTargets.includes('全被使用者') ? 'checked' : '';
+    targetOptionsHtml += `<label style="display:flex; align-items:center; padding: 8px 10px; cursor:pointer; border-bottom: 1px solid #eee; font-size: 14px;">
+        <input type="checkbox" class="chart-target-checkbox" value="全被使用者" onchange="onChartTargetCheckboxChange(this)" style="width:16px; height:16px; margin-right:8px; cursor:pointer;" ${isAllTargetChecked}> <span style="flex:1;">全被使用者</span>
+    </label>`;
+    
+    Array.from(uniqueTargets).sort().forEach(u => {
+        let isChecked = currentSelectedTargets.includes(u) ? 'checked' : '';
+        targetOptionsHtml += `<label style="display:flex; align-items:center; padding: 8px 10px; cursor:pointer; border-bottom: 1px solid #eee; font-size: 14px;">
+            <input type="checkbox" class="chart-target-checkbox" value="${u}" onchange="onChartTargetCheckboxChange(this)" style="width:16px; height:16px; margin-right:8px; cursor:pointer;" ${isChecked}> <span style="flex:1;">${u}</span>
+        </label>`;
+    });
+
+    const targetOptsContainer = document.getElementById('chartTargetSelectOptions');
+    if (targetOptsContainer) {
+        targetOptsContainer.innerHTML = targetOptionsHtml;
+        window.updateChartTargetSelectLabel();
+    }
+
+    let currentSelectedCompareUsers = [];
+    if (document.querySelectorAll('.compare-user-checkbox').length > 0) {
+        currentSelectedCompareUsers = window.getSelectedCompareUsers();
+    } else {
+        currentSelectedCompareUsers = ['總和 (不區分)'];
+    }
+
+    let compareOptionsHtml = '';
+    let isAllCompChecked = currentSelectedCompareUsers.includes('總和 (不區分)') ? 'checked' : '';
+    compareOptionsHtml += `<label style="display:flex; align-items:center; padding: 8px 10px; cursor:pointer; border-bottom: 1px solid #eee; font-size: 14px;">
+        <input type="checkbox" class="compare-user-checkbox" value="總和 (不區分)" onchange="onCompareUserCheckboxChange(this)" style="width:16px; height:16px; margin-right:8px; cursor:pointer;" ${isAllCompChecked}> <span style="flex:1;">總和 (不區分)</span>
+    </label>`;
+    
+    Array.from(uniqueTargets).sort().forEach(u => {
+        let isChecked = currentSelectedCompareUsers.includes(u) ? 'checked' : '';
+        compareOptionsHtml += `<label style="display:flex; align-items:center; padding: 8px 10px; cursor:pointer; border-bottom: 1px solid #eee; font-size: 14px;">
+            <input type="checkbox" class="compare-user-checkbox" value="${u}" onchange="onCompareUserCheckboxChange(this)" style="width:16px; height:16px; margin-right:8px; cursor:pointer;" ${isChecked}> <span style="flex:1;">${u}</span>
+        </label>`;
+    });
+
+    const compareOptsContainer = document.getElementById('compareUserSelectOptions');
+    if (compareOptsContainer) {
+        compareOptsContainer.innerHTML = compareOptionsHtml;
+        window.updateCompareUserSelectLabel();
+    }
+
     let currentSelectedProjects = [];
     if (document.querySelectorAll('.project-checkbox').length > 0) {
         currentSelectedProjects = window.getSelectedProjects();
@@ -501,7 +808,6 @@ function updateChartDropdowns() {
     validExpenseData.forEach(e => { if(e.project) uniqueProjects.add(e.project); });
     
     let optionsHtml = '';
-    
     let isAllChecked = currentSelectedProjects.includes('全專案') ? 'checked' : '';
     optionsHtml += `<label style="display:flex; align-items:center; padding: 8px 10px; cursor:pointer; border-bottom: 1px solid #eee; font-size: 14px;">
         <input type="checkbox" class="project-checkbox" value="全專案" onchange="onProjectCheckboxChange(this)" style="width:16px; height:16px; margin-right:8px; cursor:pointer;" ${isAllChecked}> <span style="flex:1;">全專案</span>
@@ -817,11 +1123,12 @@ window.renderDailyList = function() {
         const emoji = getIcon(e.mainCategory, '大分類');
         const userStyle = getUserColorStyle(e.user); 
         
+        let tUsers = (e.targetUser || e.user).split(',').map(x=>x.trim()).filter(x=>x);
         let targetHtml = '';
-        let tUser = e.targetUser || e.user;
-        if (tUser !== e.user) {
-            const targetStyle = getUserColorStyle(tUser);
-            targetHtml = `<span style="color:#aaa; font-size:10px; margin:0 2px;">▶</span><span class="detail-user-tag" style="${targetStyle}">${tUser}</span>`;
+        let nonSelfTargets = tUsers.filter(tu => tu !== e.user);
+        if (nonSelfTargets.length > 0) {
+            targetHtml = `<span style="color:#aaa; font-size:10px; margin:0 2px;">▶</span>` +
+                         nonSelfTargets.map(tu => `<span class="detail-user-tag" style="${getUserColorStyle(tu)}">${tu}</span>`).join('<span style="margin:0 2px;"></span>');
         }
 
         let projectHtml = e.project ? `<span class="detail-project-tag">★ ${e.project}</span>` : '';
@@ -860,7 +1167,7 @@ window.renderDailyList = function() {
                     ${e.content ? `<div style="font-size:13.5px; color:#333; margin-top:8px; padding-left:40px; font-weight:500;">${e.content}</div>` : ''}
                 </div>
                 <div style="text-align:right;">
-                    <div style="color:${color}; font-weight:bold; font-size:16px; margin-bottom:4px;">${sign}$${amt}</div>
+                    <div style="color:${color}; font-weight:bold; font-size:16px; margin-bottom:4px;">${sign}$${amt.toLocaleString()}</div>
                     <div style="display:flex; gap:8px; justify-content:flex-end; align-items:center;">
                         ${actionsHtml}
                     </div>
@@ -893,22 +1200,24 @@ window.renderExceptionList = function() {
     
     list.innerHTML = exceptionExpenseData.map(e => {
         const userStyle = getUserColorStyle(e.user);
-        let tUser = e.targetUser || e.user;
+        
+        let tUsers = (e.targetUser || e.user).split(',').map(x=>x.trim()).filter(x=>x);
         let targetHtml = '';
-        if (tUser !== e.user) {
-            const targetStyle = getUserColorStyle(tUser);
-            targetHtml = `<span style="color:#aaa; font-size:10px; margin:0 2px;">▶</span><span class="detail-user-tag" style="${targetStyle}">${tUser}</span>`;
+        let nonSelfTargets = tUsers.filter(tu => tu !== e.user);
+        if (nonSelfTargets.length > 0) {
+            targetHtml = `<span style="color:#aaa; font-size:10px; margin:0 2px;">▶</span>` +
+                         nonSelfTargets.map(tu => `<span class="detail-user-tag" style="${getUserColorStyle(tu)}">${tu}</span>`).join('<span style="margin:0 2px;"></span>');
         }
 
         return `
         <div style="padding:15px 0; border-bottom:1px solid #f0f0f0;">
             <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
                 <div style="font-weight:bold; font-size:15px; text-decoration: line-through; color:#999;">${e.subCategory}</div>
-                <div style="color:${e.type === '收入' ? '#4CAF50' : '#ef5350'}; font-weight:bold;">$${e.amount}</div>
+                <div style="color:${e.type === '收入' ? '#4CAF50' : '#ef5350'}; font-weight:bold;">$${Number(e.amount).toLocaleString()}</div>
             </div>
             <div style="font-size:12px; color:#888; margin-bottom:8px; display:flex; align-items:center; gap:6px;">
                 <span style="background:#ffebee; color:#c62828; padding:2px 6px; border-radius:4px; font-weight:bold;">⚠️ ${e.exceptionReason}</span>
-                <span>${e.date}</span>
+                <span>${window.formatSlashDate(e.date)}</span>
                 <span class="detail-user-tag" style="${userStyle}">${e.user}</span>
                 ${targetHtml}
             </div>
@@ -927,7 +1236,6 @@ window.renderChart = function() {
     const ysEl = document.getElementById('chartYearSelect');
     const msEl = document.getElementById('chartMonthSelect');
     const userSel = document.getElementById('chartUserSelect');
-    const targetUserSel = document.getElementById('chartTargetUserSelect');
     
     if(!container || !inOutSel) return;
 
@@ -936,19 +1244,22 @@ window.renderChart = function() {
     const ys = ysEl ? ysEl.value : '';
     const ms = msEl ? msEl.value : '';
     const selectedUser = userSel ? userSel.value : '全付款人';
-    const selectedTargetUser = targetUserSel ? targetUserSel.value : '全被使用者';
     
-    // 🌟 從自訂下拉選單讀取勾選了哪些專案
     const selectedProjects = window.getSelectedProjects();
+    const selectedTargets = window.getSelectedChartTargets();
     
     let filtered = validExpenseData;
     
     filtered = filtered.filter(e => !(e.mainCategory === '信用卡' && e.subCategory === '繳信用卡' && e.type === '支出'));
-    filtered = filtered.filter(e => e.mainCategory !== '轉帳');
 
     const showCheckout = document.getElementById('chartShowCheckout') ? document.getElementById('chartShowCheckout').checked : false;
     if (!showCheckout) {
         filtered = filtered.filter(e => !isCheckoutRecord(e));
+    }
+
+    const showTransfer = document.getElementById('chartShowTransfer') ? document.getElementById('chartShowTransfer').checked : false;
+    if (!showTransfer) {
+        filtered = filtered.filter(e => e.mainCategory !== '轉帳');
     }
 
     if (currentChartInOut === '支出') filtered = filtered.filter(e => e.type === '支出');
@@ -957,14 +1268,14 @@ window.renderChart = function() {
     if (selectedUser && selectedUser !== '全付款人') {
         filtered = filtered.filter(e => String(e.user).trim() === String(selectedUser).trim());
     }
-    if (selectedTargetUser && selectedTargetUser !== '全被使用者') {
+    
+    if (selectedTargets.length > 0 && !selectedTargets.includes('全被使用者')) {
         filtered = filtered.filter(e => {
-            let tUser = e.targetUser || e.user; 
-            return String(tUser).trim() === String(selectedTargetUser).trim();
+            let tUsers = (e.targetUser || e.user).split(',').map(x=>x.trim()); 
+            return tUsers.some(tu => selectedTargets.includes(tu));
         });
     }
     
-    // 🌟 支援多選專案與無專案過濾
     if (selectedProjects.length > 0 && !selectedProjects.includes('全專案')) {
         filtered = filtered.filter(e => {
             let p = String(e.project || '').trim();
@@ -1005,14 +1316,14 @@ window.renderChart = function() {
         if (!groupMap[mainKey]) groupMap[mainKey] = { total: 0, subs: {} };
 
         if (e.type === '支出') {
-            totalExpense += amt;
+            if (mainKey !== '轉帳' && !isCheckoutRecord(e)) totalExpense += amt;
             if (currentChartInOut === '支出' || currentChartInOut === '總收支') {
                 let val = (currentChartInOut === '總收支') ? -amt : amt;
                 groupMap[mainKey].total += val;
                 groupMap[mainKey].subs[subKey] = (groupMap[mainKey].subs[subKey] || 0) + val;
             }
         } else {
-            totalIncome += amt;
+            if (mainKey !== '轉帳' && !isCheckoutRecord(e)) totalIncome += amt;
             if (currentChartInOut === '收入' || currentChartInOut === '總收支') {
                 groupMap[mainKey].total += amt;
                 groupMap[mainKey].subs[subKey] = (groupMap[mainKey].subs[subKey] || 0) + amt;
@@ -1095,19 +1406,22 @@ window.openChartDetail = function(label) {
     const ys = document.getElementById('chartYearSelect').value;
     const ms = document.getElementById('chartMonthSelect').value;
     const selectedUser = document.getElementById('chartUserSelect').value;
-    const selectedTargetUser = document.getElementById('chartTargetUserSelect').value;
     
-    // 🌟 從自訂下拉選單讀取勾選了哪些專案
     const selectedProjects = window.getSelectedProjects();
+    const selectedTargets = window.getSelectedChartTargets();
     
     let filtered = validExpenseData;
     
     filtered = filtered.filter(e => !(e.mainCategory === '信用卡' && e.subCategory === '繳信用卡' && e.type === '支出'));
-    filtered = filtered.filter(e => e.mainCategory !== '轉帳');
 
     const showCheckout = document.getElementById('chartShowCheckout') ? document.getElementById('chartShowCheckout').checked : false;
     if (!showCheckout) {
         filtered = filtered.filter(e => !isCheckoutRecord(e));
+    }
+
+    const showTransfer = document.getElementById('chartShowTransfer') ? document.getElementById('chartShowTransfer').checked : false;
+    if (!showTransfer) {
+        filtered = filtered.filter(e => e.mainCategory !== '轉帳');
     }
 
     if (currentChartInOut === '支出') filtered = filtered.filter(e => e.type === '支出');
@@ -1116,14 +1430,14 @@ window.openChartDetail = function(label) {
     if (selectedUser && selectedUser !== '全付款人') {
         filtered = filtered.filter(e => String(e.user).trim() === String(selectedUser).trim());
     }
-    if (selectedTargetUser && selectedTargetUser !== '全被使用者') {
+    
+    if (selectedTargets.length > 0 && !selectedTargets.includes('全被使用者')) {
         filtered = filtered.filter(e => {
-            let tUser = e.targetUser || e.user; 
-            return String(tUser).trim() === String(selectedTargetUser).trim();
+            let tUsers = (e.targetUser || e.user).split(',').map(x=>x.trim()); 
+            return tUsers.some(tu => selectedTargets.includes(tu));
         });
     }
     
-    // 🌟 支援多選專案與無專案過濾 (明細頁面)
     if (selectedProjects.length > 0 && !selectedProjects.includes('全專案')) {
         filtered = filtered.filter(e => {
             let p = String(e.project || '').trim();
@@ -1167,12 +1481,14 @@ window.openChartDetail = function(label) {
             const sign = e.type === '收入' ? '+' : '-';
             const userStyle = getUserColorStyle(e.user);
             
+            let tUsers = (e.targetUser || e.user).split(',').map(x=>x.trim()).filter(x=>x);
             let targetHtml = '';
-            let tUser = e.targetUser || e.user;
-            if (tUser !== e.user) {
-                const targetStyle = getUserColorStyle(tUser);
-                targetHtml = `<span style="color:#aaa; font-size:10px; margin:0 2px;">▶</span><span class="detail-user-tag" style="${targetStyle}">${tUser}</span>`;
+            let nonSelfTargets = tUsers.filter(tu => tu !== e.user);
+            if (nonSelfTargets.length > 0) {
+                targetHtml = `<span style="color:#aaa; font-size:10px; margin:0 2px;">▶</span>` +
+                             nonSelfTargets.map(tu => `<span class="detail-user-tag" style="${getUserColorStyle(tu)}">${tu}</span>`).join('<span style="margin:0 2px;"></span>');
             }
+            
             let projectHtml = e.project ? `<span class="detail-project-tag">★ ${e.project}</span>` : '';
 
             return `
@@ -1180,6 +1496,7 @@ window.openChartDetail = function(label) {
                 <div style="display:flex; justify-content:space-between; align-items:flex-start;">
                     <div>
                         <div style="display:flex; align-items:center; flex-wrap:wrap; gap:5px;">
+                            <span style="font-size:13px; font-weight:bold; color:#666; margin-right:5px;">${window.formatSlashDate(e.date)}</span>
                             <span class="detail-tag">${e.subCategory}</span>
                             ${projectHtml}
                             <span class="detail-user-tag" style="${userStyle}">${e.user}</span>
@@ -1188,7 +1505,7 @@ window.openChartDetail = function(label) {
                         ${e.content ? `<div style="font-size:13.5px; color:#333; margin-top:8px; font-weight:500;">${e.content}</div>` : ''}
                     </div>
                     <div style="text-align:right;">
-                        <div style="color:${color}; font-weight:bold; font-size:16px; margin-bottom:8px;">${sign}$${e.amount}</div>
+                        <div style="color:${color}; font-weight:bold; font-size:16px; margin-bottom:8px;">${sign}$${Number(e.amount).toLocaleString()}</div>
                         <div style="display:flex; gap:8px; justify-content:flex-end;">
                             <button class="icon-btn-gray" style="font-size:13px; background:#f5f5f5; padding:4px 8px; border-radius:4px;" onclick="editExpense('${e.id}')">✎</button>
                             <button class="icon-btn-red" style="font-size:13px; background:#ffebee; padding:4px 8px; border-radius:4px;" onclick="deleteExpense('${e.id}')">✕</button>
@@ -1203,6 +1520,9 @@ window.openChartDetail = function(label) {
     document.getElementById('page-chart-detail').classList.add('active');
 };
 
+// ==========================================
+// 比較頁面渲染邏輯 (加入嚴謹的平均計算與標籤防重疊)
+// ==========================================
 window.renderComparePage = function() {
     const baseYearStr = document.getElementById('compareBaseYear').value;
     const endYearStr = document.getElementById('compareEndYear').value;
@@ -1212,22 +1532,27 @@ window.renderComparePage = function() {
     
     if(!summaryContainer || !chartContainer) return;
 
-    const isSplitUser = document.getElementById('compareSplitUser') ? document.getElementById('compareSplitUser').checked : false;
+    // 🌟 取得比較頁面的「區分使用者」多選狀態
+    const selectedCompareUsers = window.getSelectedCompareUsers();
+    const isTotalMode = selectedCompareUsers.includes('總和 (不區分)');
 
     let xLabels = [];
     let cardTitle = "";
     let datasets = [];
 
+    // 🌟 比較頁只抓「支出」，且排除繳卡
     let expenses = validExpenseData.filter(e => 
         e.type === '支出' && 
-        !(e.mainCategory === '信用卡' && e.subCategory === '繳信用卡') && 
-        e.mainCategory !== '轉帳'
-    );
+        !(e.mainCategory === '信用卡' && e.subCategory === '繳信用卡')
+    ); 
 
     const showCheckout = document.getElementById('compareShowCheckout') ? document.getElementById('compareShowCheckout').checked : false;
     if (!showCheckout) {
         expenses = expenses.filter(e => !isCheckoutRecord(e));
     }
+    
+    // 🌟 比較頁強制排除轉帳
+    expenses = expenses.filter(e => e.mainCategory !== '轉帳');
 
     let uniqueYears = [];
     if (compareMode === 'currentYearMonth') {
@@ -1244,21 +1569,36 @@ window.renderComparePage = function() {
         xLabels = uniqueYears.map(y => y + "年");
     }
 
+    // 🌟 產生時間檢查陣列 (如果當月未結束，則不列入算平均的分母)
+    const now = new Date();
+    const currentY = now.getFullYear();
+    const currentM = now.getMonth() + 1;
+    let validIndices = xLabels.map((lbl, i) => {
+        if (compareMode === 'currentYearMonth') {
+            let y = parseInt(baseYearStr, 10);
+            let m = i + 1;
+            return (y < currentY) || (y === currentY && m < currentM);
+        } else if (compareMode === 'year') {
+            let y = parseInt(lbl.replace('年', ''), 10);
+            return y < currentY;
+        } else if (compareMode === 'month') {
+            let y = parseInt(lbl.replace('年', ''), 10);
+            let m = month;
+            return (y < currentY) || (y === currentY && m < currentM);
+        }
+        return true;
+    });
+
     let userMap = {}; 
-    if (isSplitUser) {
-        let uniqueUsers = [...new Set(expenses.map(e => e.targetUser || e.user))];
-        uniqueUsers.forEach(u => userMap[u] = new Array(xLabels.length).fill(0));
-    } else {
+    if (isTotalMode) {
         userMap['總計支出'] = new Array(xLabels.length).fill(0);
+    } else {
+        selectedCompareUsers.forEach(u => userMap[u] = new Array(xLabels.length).fill(0));
     }
 
     expenses.forEach(e => {
         if(!e.date) return;
         
-        let tUser = e.targetUser || e.user;
-        let targetArray = isSplitUser ? userMap[tUser] : userMap['總計支出'];
-        if(!targetArray) return;
-
         let p = e.date.split('-');
         let y = p[0];
         let m = parseInt(p[1], 10);
@@ -1276,14 +1616,25 @@ window.renderComparePage = function() {
         }
 
         if(index !== -1) {
-            targetArray[index] += Number(e.amount);
+            let tUsers = (e.targetUser || e.user).split(',').map(x=>x.trim());
+            if (isTotalMode) {
+                userMap['總計支出'][index] += Number(e.amount);
+            } else {
+                let splitAmt = Number(e.amount) / Math.max(tUsers.length, 1);
+                tUsers.forEach(tUser => {
+                    if (userMap[tUser]) userMap[tUser][index] += splitAmt;
+                });
+            }
         }
     });
 
     let globalTotal = 0;
+    // 建立一個追蹤總體數據各節點陣列，用於計算「總時間節點平均」
+    let globalDataArr = new Array(xLabels.length).fill(0);
+
     for (const [key, dataArr] of Object.entries(userMap)) {
         let color = '#2196F3';
-        if (isSplitUser) {
+        if (!isTotalMode) {
             let userObj = appData['使用者'].find(u => u.name === key);
             color = (userObj && userObj.color) ? userObj.color : getRandomColor();
         } else {
@@ -1292,28 +1643,91 @@ window.renderComparePage = function() {
             else color = '#4CAF50';
         }
         datasets.push({ label: key, data: dataArr, color: color });
-        globalTotal += dataArr.reduce((a, b) => a + b, 0);
+        
+        let sum = 0;
+        dataArr.forEach((val, i) => {
+            sum += val;
+            globalDataArr[i] += val;
+        });
+        globalTotal += sum;
     }
 
     renderSvgChart(chartContainer, xLabels, datasets);
 
-    let avg = Math.round(globalTotal / Math.max(xLabels.length, 1)); 
+    // 🌟 計算圖表總計的平均 (嚴格排除未結束時間的數據)
+    let globalAvgTotal = 0;
+    let globalAvgCount = 0;
+    globalDataArr.forEach((v, i) => {
+        if (validIndices[i] && v > 0) {
+            globalAvgTotal += v;
+            globalAvgCount++;
+        }
+    });
+    // 防呆：如果全都是未結束的時間（例如只單看當下月份），那就退回把有數字的都平均起來
+    if (globalAvgCount === 0 && globalTotal > 0) {
+        globalDataArr.forEach((v, i) => {
+            if (v > 0) {
+                globalAvgTotal += v;
+                globalAvgCount++;
+            }
+        });
+    }
+    let avg = globalAvgCount > 0 ? Math.round(globalAvgTotal / globalAvgCount) : 0;
     
-    summaryContainer.innerHTML = `
-        <div class="compare-card">
+    let summaryHtml = `
+        <div class="compare-card" style="margin-bottom:10px;">
             <div class="compare-card-title">${cardTitle}</div>
             <div class="compare-row main">
                 <span class="compare-label">圖表總支出</span>
                 <span class="compare-val-main">$${globalTotal.toLocaleString()}</span>
             </div>
-            <div class="compare-row">
+            <div class="compare-row" style="${!isTotalMode ? 'margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px dashed #ccc;' : ''}">
                 <span class="compare-sub-label">時間節點平均支出</span>
                 <span class="compare-diff gray">$${avg.toLocaleString()}</span>
             </div>
-        </div>
     `;
+
+    // 🌟 多位使用者模式時，列出個別數據與其專屬的有效平均
+    if (!isTotalMode && datasets.length > 0) {
+        summaryHtml += `<div style="font-size: 13px; color: #666; font-weight: bold; margin-bottom: 8px;">各別統計：</div>`;
+        datasets.forEach(ds => {
+            let dsTotal = ds.data.reduce((a, b) => a + b, 0);
+            
+            let dsAvgTotal = 0;
+            let dsAvgCount = 0;
+            ds.data.forEach((v, i) => {
+                if (validIndices[i] && v > 0) {
+                    dsAvgTotal += v;
+                    dsAvgCount++;
+                }
+            });
+            if (dsAvgCount === 0 && dsTotal > 0) {
+                ds.data.forEach(v => {
+                    if (v > 0) {
+                        dsAvgTotal += v;
+                        dsAvgCount++;
+                    }
+                });
+            }
+            let dsAvg = dsAvgCount > 0 ? Math.round(dsAvgTotal / dsAvgCount) : 0;
+            
+            summaryHtml += `
+                <div style="display:flex; justify-content:space-between; align-items:center; padding: 4px 0; font-size: 13px;">
+                    <span style="display:flex; align-items:center;">
+                        <span style="display:inline-block; width:10px; height:10px; background:${ds.color}; border-radius:50%; margin-right:6px;"></span>
+                        ${ds.label}
+                    </span>
+                    <span style="font-weight:bold; color:#333;">總計: $${dsTotal.toLocaleString()} <span style="color:#aaa; font-weight:normal; margin-left:4px;">(均 $${dsAvg.toLocaleString()})</span></span>
+                </div>
+            `;
+        });
+    }
+
+    summaryHtml += `</div>`;
+    summaryContainer.innerHTML = summaryHtml;
 };
 
+// 🌟 SVG 圖表繪製與防止標籤重疊處理
 function renderSvgChart(container, xLabels, datasets) {
     const width = container.clientWidth || 300;
     const height = 240;
@@ -1328,13 +1742,15 @@ function renderSvgChart(container, xLabels, datasets) {
 
     let svg = `<svg width="100%" height="${height}">`;
 
+    // 畫背景橫線與左側 Y 軸標籤
     for(let i=0; i<=4; i++) {
         let y = padY + chartH - (i/4)*chartH;
         let val = Math.round((i/4)*maxVal);
         svg += `<line x1="${padX}" y1="${y}" x2="${width-padX}" y2="${y}" stroke="#eee" />`;
-        svg += `<text x="${padX-5}" y="${y+4}" font-size="10" text-anchor="end" fill="#999">${val}</text>`;
+        svg += `<text x="${padX-5}" y="${y+4}" font-size="10" text-anchor="end" fill="#999">${val.toLocaleString()}</text>`;
     }
 
+    // 畫 X 軸標籤
     let step = Math.ceil(xLabels.length / 6);
     xLabels.forEach((lbl, i) => {
         let x = padX + (i / (xLabels.length - 1)) * chartW;
@@ -1343,6 +1759,7 @@ function renderSvgChart(container, xLabels, datasets) {
         }
     });
 
+    // 畫資料線條與節點圓圈
     datasets.forEach(ds => {
         let points = ds.data.map((val, i) => {
             let x = padX + (i / (xLabels.length - 1)) * chartW;
@@ -1357,15 +1774,49 @@ function renderSvgChart(container, xLabels, datasets) {
             let x = padX + (i / (xLabels.length - 1)) * chartW;
             let y = padY + chartH - (val/maxVal) * chartH;
             svg += `<circle cx="${x}" cy="${y}" r="4" fill="white" stroke="${ds.color}" stroke-width="2" />`;
-            
-            if(ds.data.length <= 12) { 
-                svg += `<text x="${x}" y="${y-10}" font-size="10" text-anchor="middle" font-weight="bold" fill="${ds.color}" style="text-shadow: 1px 1px 0 #fff, -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff;">$${val.toLocaleString()}</text>`;
-            }
         });
     });
 
+    // 🌟 文字標籤防重疊處理 (限定節點不超過 12 個才顯示數字)
+    if (datasets.length > 0 && datasets[0].data.length <= 12) {
+        let labelsToDraw = [];
+        
+        // 1. 蒐集每個 X 軸點上要畫的文字與原始 Y 座標
+        datasets.forEach(ds => {
+            ds.data.forEach((val, i) => {
+                if(val === 0 && ds.data.length > 12) return;
+                if(!labelsToDraw[i]) labelsToDraw[i] = [];
+                let x = padX + (i / (xLabels.length - 1)) * chartW;
+                let y = padY + chartH - (val/maxVal) * chartH;
+                labelsToDraw[i].push({ val: val, x: x, y: y, color: ds.color });
+            });
+        });
+
+        // 2. 針對同一垂直線上過度密集的文字進行推擠 (錯開)
+        labelsToDraw.forEach(colLabels => {
+            if(!colLabels) return;
+            // 排序: Y值由大排到小 (畫面上的由下到上，數字越小排越前面處理)
+            colLabels.sort((a,b) => b.y - a.y); 
+            
+            for(let j = 1; j < colLabels.length; j++) {
+                let prev = colLabels[j-1];
+                let curr = colLabels[j];
+                // 如果這個文字距離下方的文字距離 < 14px，就把它往上推
+                if((prev.y - curr.y) < 14) {
+                    curr.y = prev.y - 14;
+                }
+            }
+            
+            // 3. 實際將位移後的文字畫出
+            colLabels.forEach(lbl => {
+                svg += `<text x="${lbl.x}" y="${lbl.y-10}" font-size="10" text-anchor="middle" font-weight="bold" fill="${lbl.color}" style="text-shadow: 1px 1px 0 #fff, -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff;">$${lbl.val.toLocaleString()}</text>`;
+            });
+        });
+    }
+
     svg += `</svg>`;
 
+    // 畫底部圖例 (Legend)
     let legendHtml = '';
     if (datasets.length > 1) {
         legendHtml = '<div style="display:flex; justify-content:center; flex-wrap:wrap; gap:12px; margin-top:10px; padding:0 15px;">';
@@ -1409,7 +1860,7 @@ window.quickAdd = async function(type) {
         window.updateFormDropdowns(); 
         if (type === '使用者') { 
             document.getElementById('user').value = payload.name; 
-            document.getElementById('targetUser').value = payload.name; 
+            document.getElementById('targetUser').value = payload.name;
         }
         if (type === '大分類') { document.getElementById('mainCategory').value = payload.name; window.updateFormSubCategory(); }
         if (type === '小分類') document.getElementById('subCategory').value = payload.name;
@@ -1439,8 +1890,9 @@ window.editExpense = function(id) {
     else userSel.value = ""; 
 
     let targetSel = document.getElementById('targetUser');
-    let tUser = exp.targetUser || exp.user; 
-    if(appData['使用者'].find(u => u.name === tUser)) targetSel.value = tUser;
+    let tUserStr = exp.targetUser || exp.user; 
+    let firstTarget = tUserStr.split(',')[0].trim();
+    if(appData['使用者'].find(u => u.name === firstTarget)) targetSel.value = firstTarget;
     else targetSel.value = ""; 
 
     let mainSel = document.getElementById('mainCategory');
@@ -1457,6 +1909,7 @@ window.editExpense = function(id) {
     else projectSel.value = ""; 
 
     document.getElementById('submitBtn').innerText = '儲存修改';
+    window.updateFormDropdowns();
     document.getElementById('addModal').style.display = 'flex';         
 };
 
@@ -1596,7 +2049,10 @@ window.getUserBalance = function(userName) {
 
         if (isTransfer) {
             if (e.user === userName) deposit -= amt;
-            if (e.targetUser === userName && e.targetUser !== e.user) deposit += amt;
+            let tUsers = (e.targetUser || e.user).split(',').map(x=>x.trim());
+            if (tUsers.includes(userName) && e.user !== userName) {
+                deposit += (amt / Math.max(tUsers.length, 1));
+            }
         } else {
             if (e.user === userName) {
                 if (method === '存款') {
@@ -1729,7 +2185,6 @@ window.updateFormDropdowns = function() {
         else mainSel.value = '';
     }
 
-    // 這裡的是「新增記帳明細」的下拉選單，維持原本的單選
     if(projectSel) {
         projectSel.innerHTML = `<option value="">無</option>` + appData['專案'].map(i => `<option value="${i.name}">${i.name}</option>`).join('');
         if (curProject && appData['專案'].find(p => p.name === curProject)) projectSel.value = curProject;

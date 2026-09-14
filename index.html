@@ -11,8 +11,10 @@
   <header class="app-header">
     <div class="header-left"><select id="globalLedgerSelect"><option value="日常帳本">日常帳本</option></select></div>
     <div class="header-title" id="headerTitle">日概況</div>
-    <div class="header-right">
-        <button id="migrateBtn" onclick="migrateDataFromGAS()" style="background: #ffcc80; border: none; padding: 5px 10px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 13px; color: #e65100;">📥 一鍵搬移舊資料</button>
+    <div class="header-right" style="display: flex; gap: 8px;">
+        <button id="exportBtn" onclick="exportDataToCSV()" style="background: #e1bee7; border: none; padding: 5px 10px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 13px; color: #4a148c;">📤 匯出</button>
+        <button id="importBtn" onclick="document.getElementById('importCsvInput').click()" style="background: #ffcc80; border: none; padding: 5px 10px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 13px; color: #e65100;">📥 匯入</button>
+        <input type="file" id="importCsvInput" accept=".csv" style="display:none;" onchange="importDataFromCSV(event)">
     </div>
   </header>
 
@@ -61,21 +63,30 @@
           </span>
 
           <select id="chartUserSelect"><option value="全付款人">全付款人</option></select>
-          <select id="chartTargetUserSelect"><option value="全被使用者">全被使用者</option></select>
           
-          <!-- 🌟 升級為自訂的下拉勾選選單 -->
+          <div class="custom-multi-select" id="customChartTargetSelect" style="flex: 1 1 30%; min-width: 120px; position: relative;">
+            <div class="select-box" id="chartTargetSelectBox" onclick="toggleChartTargetDropdown()" style="border: 1px solid #ccc; border-radius: 8px; padding: 10px 8px; font-size: 14px; font-weight: bold; background-color: white; color: #333; cursor: pointer; text-align: left; display: flex; justify-content: space-between; align-items: center; height: 38px;">
+              <span id="chartTargetSelectLabel" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">全被使用者</span>
+              <span style="font-size: 10px; color: #888;">▼</span>
+            </div>
+            <div class="select-options" id="chartTargetSelectOptions" style="display: none; position: absolute; top: 100%; left: 0; width: 100%; background: white; border: 1px solid #ccc; border-radius: 8px; margin-top: 4px; z-index: 999; max-height: 250px; overflow-y: auto; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
+            </div>
+          </div>
+          
           <div class="custom-multi-select" id="customProjectSelect" style="flex: 1 1 30%; min-width: 120px; position: relative;">
             <div class="select-box" id="projectSelectBox" onclick="toggleProjectDropdown()" style="border: 1px solid #ccc; border-radius: 8px; padding: 10px 8px; font-size: 14px; font-weight: bold; background-color: white; color: #333; cursor: pointer; text-align: left; display: flex; justify-content: space-between; align-items: center; height: 38px;">
               <span id="projectSelectLabel" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">全專案</span>
               <span style="font-size: 10px; color: #888;">▼</span>
             </div>
             <div class="select-options" id="projectSelectOptions" style="display: none; position: absolute; top: 100%; left: 0; width: 100%; background: white; border: 1px solid #ccc; border-radius: 8px; margin-top: 4px; z-index: 999; max-height: 250px; overflow-y: auto; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
-              <!-- 勾選選項將由 JS 動態生成 -->
             </div>
           </div>
 
           <label style="display:flex; align-items:center; font-size:14px; font-weight:bold; color:#555; cursor:pointer; padding:5px;">
             <input type="checkbox" id="chartShowCheckout" style="width:16px; height:16px; margin-right:4px;"> 顯示結帳
+          </label>
+          <label style="display:flex; align-items:center; font-size:14px; font-weight:bold; color:#555; cursor:pointer; padding:5px;">
+            <input type="checkbox" id="chartShowTransfer" style="width:16px; height:16px; margin-right:4px;"> 顯示轉帳
           </label>
         </div>
         <div class="chart-summary-box"><span id="chartSummaryText">總支出: $0</span></div>
@@ -94,20 +105,25 @@
           </select>
         </div>
         
-        <div class="chart-filter-row" style="margin-bottom:5px; justify-content:center; align-items:center; gap:8px;">
-          <select id="compareBaseYear" style="flex:1;"></select>
+        <div class="chart-filter-row" style="margin-bottom:5px; justify-content:center; align-items:center; gap:8px; flex-wrap:wrap;">
+          <select id="compareBaseYear" style="flex:1; min-width:80px;"></select>
           <span id="compareRangeLabel" style="font-weight:bold; color:#888; display:none;">至</span>
-          <select id="compareEndYear" style="flex:1; display:none;"></select>
-          <select id="compareMonth" style="flex:1; display:none;">
+          <select id="compareEndYear" style="flex:1; min-width:80px; display:none;"></select>
+          <select id="compareMonth" style="flex:1; min-width:80px; display:none;">
             <option value="1">1月</option><option value="2">2月</option><option value="3">3月</option>
             <option value="4">4月</option><option value="5">5月</option><option value="6">6月</option>
             <option value="7">7月</option><option value="8">8月</option><option value="9">9月</option>
             <option value="10">10月</option><option value="11">11月</option><option value="12">12月</option>
           </select>
           
-          <label style="display:flex; align-items:center; font-size:14px; font-weight:bold; color:#555; cursor:pointer; padding:5px;">
-            <input type="checkbox" id="compareSplitUser" style="width:16px; height:16px; margin-right:4px;"> 區分使用者
-          </label>
+          <div class="custom-multi-select" id="customCompareUserSelect" style="flex: 1 1 30%; min-width: 140px; position: relative;">
+            <div class="select-box" id="compareUserSelectBox" onclick="toggleCompareUserDropdown()" style="border: 1px solid #ccc; border-radius: 6px; padding: 6px 8px; font-size: 14px; font-weight: bold; background-color: white; color: #333; cursor: pointer; text-align: left; display: flex; justify-content: space-between; align-items: center; height: 35px;">
+              <span id="compareUserSelectLabel" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">總和 (不區分)</span>
+              <span style="font-size: 10px; color: #888;">▼</span>
+            </div>
+            <div class="select-options" id="compareUserSelectOptions" style="display: none; position: absolute; top: 100%; left: 0; width: 100%; background: white; border: 1px solid #ccc; border-radius: 6px; margin-top: 4px; z-index: 999; max-height: 250px; overflow-y: auto; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
+            </div>
+          </div>
 
           <label style="display:flex; align-items:center; font-size:14px; font-weight:bold; color:#555; cursor:pointer; padding:5px;">
             <input type="checkbox" id="compareShowCheckout" style="width:16px; height:16px; margin-right:4px;"> 顯示結帳
