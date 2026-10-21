@@ -82,6 +82,9 @@
             </div>
           </div>
 
+          <label style="display:flex; align-items:center; font-size:14px; font-weight:bold; color:#d84315; cursor:pointer; padding:5px;">
+            <input type="checkbox" id="chartShowUnrepaid" style="width:16px; height:16px; margin-right:4px;"> 僅看未還款
+          </label>
           <label style="display:flex; align-items:center; font-size:14px; font-weight:bold; color:#555; cursor:pointer; padding:5px;">
             <input type="checkbox" id="chartShowCheckout" style="width:16px; height:16px; margin-right:4px;"> 顯示結帳
           </label>
@@ -125,8 +128,14 @@
             </div>
           </div>
 
+          <label style="display:flex; align-items:center; font-size:14px; font-weight:bold; color:#d84315; cursor:pointer; padding:5px;">
+            <input type="checkbox" id="compareShowUnrepaid" style="width:16px; height:16px; margin-right:4px;"> 僅看未還款
+          </label>
           <label style="display:flex; align-items:center; font-size:14px; font-weight:bold; color:#555; cursor:pointer; padding:5px;">
             <input type="checkbox" id="compareShowCheckout" style="width:16px; height:16px; margin-right:4px;"> 顯示結帳
+          </label>
+          <label style="display:flex; align-items:center; font-size:14px; font-weight:bold; color:#555; cursor:pointer; padding:5px;">
+            <input type="checkbox" id="compareShowTransfer" style="width:16px; height:16px; margin-right:4px;"> 顯示轉帳
           </label>
         </div>
         <div id="compareChartArea" style="width:100%; height:260px; margin-top:10px;"></div>
@@ -216,7 +225,17 @@
           <div class="col"><label>小項目 <span class="quick-add" onclick="quickAdd('小分類')">➕新增</span></label><select id="subCategory" name="subCategory" required></select></div>
         </div>
         <div class="form-group"><label>專案 (選填) <span class="quick-add" onclick="quickAdd('專案')">➕新增</span></label><select id="project" name="project"><option value="">無</option></select></div>
-        <div class="form-group"><label>備註</label><input type="text" name="content"></div>
+        
+        <!-- 備註與已還款狀態 -->
+        <div class="form-group row" style="align-items: center;">
+          <div class="col" style="flex: 2;"><label>備註</label><input type="text" name="content"></div>
+          <div class="col" style="flex: 1; padding-top: 15px;">
+            <label style="cursor:pointer; display:flex; align-items:center; gap:5px; font-weight:bold; color:#e65100;">
+              <input type="checkbox" id="isRepaidCheckbox" style="width:18px; height:18px;"> 標記已還
+            </label>
+          </div>
+        </div>
+
         <button type="submit" class="submit-btn" id="submitBtn">儲存</button>
       </form>
     </div>

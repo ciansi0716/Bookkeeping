@@ -48,7 +48,7 @@ window.exportDataToCSV = function() {
         return;
     }
 
-    const headers = ['id', 'date', 'type', 'amount', 'payMethod', 'user', 'targetUser', 'mainCategory', 'subCategory', 'project', 'content', 'ledgerName'];
+    const headers = ['id', 'date', 'type', 'amount', 'payMethod', 'user', 'targetUser', 'mainCategory', 'subCategory', 'project', 'content', 'ledgerName', 'isRepaid'];
     const csvRows = [];
     csvRows.push(headers.join(','));
 
@@ -172,6 +172,8 @@ window.importDataFromCSV = async function(event) {
                 item.amount = Number(item.amount) || 0;
                 if (!item.targetUser) item.targetUser = item.user;
                 if (!item.ledgerName) item.ledgerName = document.getElementById('globalLedgerSelect').value;
+                if (item.isRepaid === 'true') item.isRepaid = true;
+                if (item.isRepaid === 'false') item.isRepaid = false;
 
                 promises.push(setDoc(doc(db, "expenses", String(item.id)), item));
             }
@@ -188,6 +190,18 @@ window.importDataFromCSV = async function(event) {
         }
     };
     reader.readAsText(file);
+};
+
+// ==========================================
+// 快速切換還款狀態
+// ==========================================
+window.toggleRepayStatus = async function(id, currentStatus) {
+    try {
+        await setDoc(doc(db, "expenses", String(id)), { isRepaid: !currentStatus }, { merge: true });
+        window.fetchData(); 
+    } catch(err) {
+        alert("狀態更新失敗：" + err.message);
+    }
 };
 
 // ==========================================
@@ -531,6 +545,7 @@ function initUI() {
     const userSel = document.getElementById('chartUserSelect');
     const chartShowCheckout = document.getElementById('chartShowCheckout');
     const chartShowTransfer = document.getElementById('chartShowTransfer');
+    const chartShowUnrepaid = document.getElementById('chartShowUnrepaid');
     
     const chartStartDate = document.getElementById('chartStartDate');
     const chartEndDate = document.getElementById('chartEndDate');
@@ -549,6 +564,14 @@ function initUI() {
         chartShowTransfer.checked = localStorage.getItem('chartShowTransfer') === 'true';
         chartShowTransfer.addEventListener('change', function() {
             localStorage.setItem('chartShowTransfer', this.checked);
+            window.renderChart();
+        });
+    }
+    
+    if(chartShowUnrepaid) {
+        chartShowUnrepaid.checked = localStorage.getItem('chartShowUnrepaid') === 'true';
+        chartShowUnrepaid.addEventListener('change', function() {
+            localStorage.setItem('chartShowUnrepaid', this.checked);
             window.renderChart();
         });
     }
@@ -591,10 +614,20 @@ function initUI() {
     const compRangeLabel = document.getElementById('compareRangeLabel');
     const compMonth = document.getElementById('compareMonth');
     const compareShowCheckout = document.getElementById('compareShowCheckout');
+    const compareShowTransfer = document.getElementById('compareShowTransfer');
+    const compareShowUnrepaid = document.getElementById('compareShowUnrepaid');
 
     if(compareShowCheckout) {
         compareShowCheckout.checked = localStorage.getItem('compareShowCheckout') === 'true';
         compareShowCheckout.addEventListener('change', function() { localStorage.setItem('compareShowCheckout', this.checked); window.renderComparePage(); });
+    }
+    if(compareShowTransfer) {
+        compareShowTransfer.checked = localStorage.getItem('compareShowTransfer') === 'true';
+        compareShowTransfer.addEventListener('change', function() { localStorage.setItem('compareShowTransfer', this.checked); window.renderComparePage(); });
+    }
+    if(compareShowUnrepaid) {
+        compareShowUnrepaid.checked = localStorage.getItem('compareShowUnrepaid') === 'true';
+        compareShowUnrepaid.addEventListener('change', function() { localStorage.setItem('compareShowUnrepaid', this.checked); window.renderComparePage(); });
     }
 
     if(compModeSel) {
@@ -624,6 +657,7 @@ function initUI() {
         document.getElementById('submitBtn').innerText = '儲存新增';
         document.getElementById('date').value = selectedDateStr; 
         document.getElementById('payMethod').value = '存款'; 
+        document.getElementById('isRepaidCheckbox').checked = false;
         window.updateFormDropdowns();
         document.getElementById('addModal').style.display = 'flex';
     };
@@ -1080,7 +1114,7 @@ window.renderDailyList = function() {
     if (isGroupedView) {
         let grouped = {};
         dailyData.forEach(e => {
-            let key = `${e.type}_${e.mainCategory}_${e.subCategory}_${e.user}_${e.targetUser}_${e.project}_${e.payMethod}`;
+            let key = `${e.type}_${e.mainCategory}_${e.subCategory}_${e.user}_${e.targetUser}_${e.project}_${e.payMethod}_${e.isRepaid}`;
             if (!grouped[key]) {
                 grouped[key] = { ...e, amount: 0, count: 0, contents: [] };
             }
@@ -1124,6 +1158,8 @@ window.renderDailyList = function() {
         const userStyle = getUserColorStyle(e.user); 
         
         let tUsers = (e.targetUser || e.user).split(',').map(x=>x.trim()).filter(x=>x);
+        let isShared = tUsers.length > 1 || (tUsers.length === 1 && tUsers[0] !== e.user);
+        
         let targetHtml = '';
         let nonSelfTargets = tUsers.filter(tu => tu !== e.user);
         if (nonSelfTargets.length > 0) {
@@ -1142,6 +1178,39 @@ window.renderDailyList = function() {
             payBadge = e.payMethod === '信用卡' ? `<span class="detail-project-tag" style="background:#e3f2fd; color:#1565c0; border-color:#bbdefb;">💳 信用卡</span>` : `<span class="detail-project-tag" style="background:#e8f5e9; color:#2e7d32; border-color:#c8e6c9;">💵 存款</span>`;
         }
 
+        // 🌟 勾選框還款按鈕處理
+        let repayBadge = '';
+        if (isShared && !isTransfer && !isCheckout) {
+            let isRepaid = e.isRepaid === true || e.isRepaid === 'true';
+            let statusText = isRepaid ? '已還' : '未還';
+            let statusColor = isRepaid ? '#4CAF50' : '#ef5350';
+            
+            if (e.isGrouped) {
+                repayBadge = `<span style="color:#999; font-size:12px; font-weight:bold;">[${statusText}] (展開可切換)</span>`;
+            } else {
+                repayBadge = `
+                <label style="display:inline-flex; align-items:center; gap:4px; cursor:pointer; margin:0;">
+                    <input type="checkbox" style="width:14px; height:14px; margin:0; cursor:pointer;" ${isRepaid ? 'checked' : ''} onchange="toggleRepayStatus('${e.id}', ${isRepaid})">
+                    <span style="color:${statusColor}; font-weight:bold; font-size:13px;">${statusText}</span>
+                </label>`;
+            }
+        }
+
+        // 🌟 無備註時不顯示無備註，若有勾選框依然可以顯示
+        let contentHtml = '';
+        if (e.content || repayBadge) {
+            let textPart = e.content ? `<span style="font-size:13px; color:#555;">📝 ${e.content}</span>` : '';
+            let divider = (e.content && repayBadge) ? `<span style="color:#ccc; font-size:12px;">|</span>` : '';
+            
+            contentHtml = `<div style="margin-top:8px; padding-left:40px;">
+                <div style="background:#fafafa; padding:6px 10px; border-radius:6px; border:1px dashed #ddd; display:inline-flex; align-items:center; flex-wrap:wrap; gap:8px; max-width:100%;">
+                    ${textPart}
+                    ${divider}
+                    ${repayBadge}
+                </div>
+            </div>`;
+        }
+
         let actionsHtml = '';
         if (e.isGrouped) {
             actionsHtml = `<span style="font-size:12px; color:#999; margin-right:5px; font-weight:bold;">取消合併以編輯</span>`;
@@ -1155,7 +1224,7 @@ window.renderDailyList = function() {
         return `
         <div style="padding:12px 0; border-bottom:1px solid #f0f0f0;">
             <div style="display:flex; justify-content:space-between; align-items:flex-start;">
-                <div>
+                <div style="flex:1;">
                     <div style="display:flex; align-items:center; flex-wrap:wrap; gap:5px;">
                         <span class="cat-emoji">${emoji}</span>
                         <span class="detail-tag">${e.subCategory}</span>
@@ -1164,7 +1233,7 @@ window.renderDailyList = function() {
                         <span class="detail-user-tag" style="${userStyle}">${e.user}</span>
                         ${targetHtml}
                     </div>
-                    ${e.content ? `<div style="font-size:13.5px; color:#333; margin-top:8px; padding-left:40px; font-weight:500;">${e.content}</div>` : ''}
+                    ${contentHtml}
                 </div>
                 <div style="text-align:right;">
                     <div style="color:${color}; font-weight:bold; font-size:16px; margin-bottom:4px;">${sign}$${amt.toLocaleString()}</div>
@@ -1250,8 +1319,6 @@ window.renderChart = function() {
     
     let filtered = validExpenseData;
     
-    filtered = filtered.filter(e => !(e.mainCategory === '信用卡' && e.subCategory === '繳信用卡' && e.type === '支出'));
-
     const showCheckout = document.getElementById('chartShowCheckout') ? document.getElementById('chartShowCheckout').checked : false;
     if (!showCheckout) {
         filtered = filtered.filter(e => !isCheckoutRecord(e));
@@ -1260,6 +1327,17 @@ window.renderChart = function() {
     const showTransfer = document.getElementById('chartShowTransfer') ? document.getElementById('chartShowTransfer').checked : false;
     if (!showTransfer) {
         filtered = filtered.filter(e => e.mainCategory !== '轉帳');
+        filtered = filtered.filter(e => !(e.mainCategory === '信用卡' && e.subCategory === '繳信用卡' && e.type === '支出'));
+    }
+
+    const showUnrepaid = document.getElementById('chartShowUnrepaid') ? document.getElementById('chartShowUnrepaid').checked : false;
+    if (showUnrepaid) {
+        filtered = filtered.filter(e => {
+            let tUsers = (e.targetUser || e.user).split(',').map(x=>x.trim()).filter(x=>x);
+            let isShared = tUsers.length > 1 || (tUsers.length === 1 && tUsers[0] !== e.user);
+            let isRepaid = e.isRepaid === true || e.isRepaid === 'true';
+            return isShared && !isRepaid;
+        });
     }
 
     if (currentChartInOut === '支出') filtered = filtered.filter(e => e.type === '支出');
@@ -1311,22 +1389,38 @@ window.renderChart = function() {
     filtered.forEach(e => {
         let mainKey = e.mainCategory || '未分類';
         let subKey = e.subCategory || '未分類';
+        
         let amt = Number(e.amount) || 0;
+        let tUsers = (e.targetUser || e.user).split(',').map(x=>x.trim()).filter(x=>x);
+        let splitAmt = amt / Math.max(tUsers.length, 1);
+        let effectiveAmt = amt;
+
+        if (selectedTargets.length > 0 && !selectedTargets.includes('全被使用者')) {
+            effectiveAmt = 0;
+            let matchedTargets = tUsers.filter(tu => selectedTargets.includes(tu));
+            matchedTargets.forEach(tu => {
+                if (tu === '共用') {
+                    effectiveAmt += amt / 2; // 共用的金額強制除以2算入
+                } else {
+                    effectiveAmt += splitAmt;
+                }
+            });
+        }
         
         if (!groupMap[mainKey]) groupMap[mainKey] = { total: 0, subs: {} };
 
         if (e.type === '支出') {
-            if (mainKey !== '轉帳' && !isCheckoutRecord(e)) totalExpense += amt;
+            if (mainKey !== '轉帳' && !isCheckoutRecord(e)) totalExpense += effectiveAmt;
             if (currentChartInOut === '支出' || currentChartInOut === '總收支') {
-                let val = (currentChartInOut === '總收支') ? -amt : amt;
+                let val = (currentChartInOut === '總收支') ? -effectiveAmt : effectiveAmt;
                 groupMap[mainKey].total += val;
                 groupMap[mainKey].subs[subKey] = (groupMap[mainKey].subs[subKey] || 0) + val;
             }
         } else {
-            if (mainKey !== '轉帳' && !isCheckoutRecord(e)) totalIncome += amt;
+            if (mainKey !== '轉帳' && !isCheckoutRecord(e)) totalIncome += effectiveAmt;
             if (currentChartInOut === '收入' || currentChartInOut === '總收支') {
-                groupMap[mainKey].total += amt;
-                groupMap[mainKey].subs[subKey] = (groupMap[mainKey].subs[subKey] || 0) + amt;
+                groupMap[mainKey].total += effectiveAmt;
+                groupMap[mainKey].subs[subKey] = (groupMap[mainKey].subs[subKey] || 0) + effectiveAmt;
             }
         }
     });
@@ -1341,11 +1435,13 @@ window.renderChart = function() {
     if (selectedUser !== '全付款人') prefixArr.push(`[${selectedUser}]`);
     let prefixStr = prefixArr.length > 0 ? prefixArr.join('') + ' ' : '';
 
+    let labelPrefix = showUnrepaid ? "未還" : "總";
+
     if (currentChartInOut === '支出') {
-        summaryEl.innerText = `${prefixStr}總支出: $${totalExpense.toLocaleString()}`;
+        summaryEl.innerText = `${prefixStr}${labelPrefix}支出: $${totalExpense.toLocaleString()}`;
         summaryBox.style.background = '#ffebee'; summaryBox.style.borderColor = '#ffcdd2'; summaryEl.style.color = '#ef5350';
     } else if (currentChartInOut === '收入') {
-        summaryEl.innerText = `${prefixStr}總收入: $${totalIncome.toLocaleString()}`;
+        summaryEl.innerText = `${prefixStr}${labelPrefix}收入: $${totalIncome.toLocaleString()}`;
         summaryBox.style.background = '#e8f5e9'; summaryBox.style.borderColor = '#c8e6c9'; summaryEl.style.color = '#4CAF50';
     } else {
         let net = totalIncome - totalExpense;
@@ -1412,8 +1508,6 @@ window.openChartDetail = function(label) {
     
     let filtered = validExpenseData;
     
-    filtered = filtered.filter(e => !(e.mainCategory === '信用卡' && e.subCategory === '繳信用卡' && e.type === '支出'));
-
     const showCheckout = document.getElementById('chartShowCheckout') ? document.getElementById('chartShowCheckout').checked : false;
     if (!showCheckout) {
         filtered = filtered.filter(e => !isCheckoutRecord(e));
@@ -1422,6 +1516,17 @@ window.openChartDetail = function(label) {
     const showTransfer = document.getElementById('chartShowTransfer') ? document.getElementById('chartShowTransfer').checked : false;
     if (!showTransfer) {
         filtered = filtered.filter(e => e.mainCategory !== '轉帳');
+        filtered = filtered.filter(e => !(e.mainCategory === '信用卡' && e.subCategory === '繳信用卡' && e.type === '支出'));
+    }
+
+    const showUnrepaid = document.getElementById('chartShowUnrepaid') ? document.getElementById('chartShowUnrepaid').checked : false;
+    if (showUnrepaid) {
+        filtered = filtered.filter(e => {
+            let tUsers = (e.targetUser || e.user).split(',').map(x=>x.trim()).filter(x=>x);
+            let isShared = tUsers.length > 1 || (tUsers.length === 1 && tUsers[0] !== e.user);
+            let isRepaid = e.isRepaid === true || e.isRepaid === 'true';
+            return isShared && !isRepaid;
+        });
     }
 
     if (currentChartInOut === '支出') filtered = filtered.filter(e => e.type === '支出');
@@ -1482,6 +1587,8 @@ window.openChartDetail = function(label) {
             const userStyle = getUserColorStyle(e.user);
             
             let tUsers = (e.targetUser || e.user).split(',').map(x=>x.trim()).filter(x=>x);
+            let isShared = tUsers.length > 1 || (tUsers.length === 1 && tUsers[0] !== e.user);
+
             let targetHtml = '';
             let nonSelfTargets = tUsers.filter(tu => tu !== e.user);
             if (nonSelfTargets.length > 0) {
@@ -1491,10 +1598,54 @@ window.openChartDetail = function(label) {
             
             let projectHtml = e.project ? `<span class="detail-project-tag">★ ${e.project}</span>` : '';
 
+            let splitAmt = Number(e.amount) / Math.max(tUsers.length, 1);
+            let displayAmt = Number(e.amount);
+
+            if (selectedTargets.length > 0 && !selectedTargets.includes('全被使用者')) {
+                displayAmt = 0;
+                let matchedTargets = tUsers.filter(tu => selectedTargets.includes(tu));
+                matchedTargets.forEach(tu => {
+                    if (tu === '共用') {
+                        displayAmt += Number(e.amount) / 2;
+                    } else {
+                        displayAmt += splitAmt;
+                    }
+                });
+            }
+
+            // 🌟 統計明細中的還款勾選框與備註整合
+            let repayBadge = '';
+            if (isShared && e.mainCategory !== '轉帳' && !isCheckoutRecord(e)) {
+                let isRepaid = e.isRepaid === true || e.isRepaid === 'true';
+                let statusText = isRepaid ? '已還' : '未還';
+                let statusColor = isRepaid ? '#4CAF50' : '#ef5350';
+                
+                repayBadge = `
+                <label style="display:inline-flex; align-items:center; gap:4px; cursor:pointer; margin:0;">
+                    <input type="checkbox" style="width:14px; height:14px; margin:0; cursor:pointer;" ${isRepaid ? 'checked' : ''} onchange="toggleRepayStatus('${e.id}', ${isRepaid})">
+                    <span style="color:${statusColor}; font-weight:bold; font-size:13px;">${statusText}</span>
+                </label>`;
+            }
+
+            // 🌟 無備註時不顯示無備註，若有勾選框依然可以顯示
+            let contentHtml = '';
+            if (e.content || repayBadge) {
+                let textPart = e.content ? `<span style="font-size:13px; color:#555;">📝 ${e.content}</span>` : '';
+                let divider = (e.content && repayBadge) ? `<span style="color:#ccc; font-size:12px;">|</span>` : '';
+                
+                contentHtml = `<div style="margin-top:8px;">
+                    <div style="background:#fafafa; padding:6px 10px; border-radius:6px; border:1px dashed #ddd; display:inline-flex; align-items:center; flex-wrap:wrap; gap:8px; max-width:100%;">
+                        ${textPart}
+                        ${divider}
+                        ${repayBadge}
+                    </div>
+                </div>`;
+            }
+
             return `
             <div style="padding:12px 0; border-bottom:1px solid #f0f0f0;">
                 <div style="display:flex; justify-content:space-between; align-items:flex-start;">
-                    <div>
+                    <div style="flex:1;">
                         <div style="display:flex; align-items:center; flex-wrap:wrap; gap:5px;">
                             <span style="font-size:13px; font-weight:bold; color:#666; margin-right:5px;">${window.formatSlashDate(e.date)}</span>
                             <span class="detail-tag">${e.subCategory}</span>
@@ -1502,10 +1653,13 @@ window.openChartDetail = function(label) {
                             <span class="detail-user-tag" style="${userStyle}">${e.user}</span>
                             ${targetHtml}
                         </div>
-                        ${e.content ? `<div style="font-size:13.5px; color:#333; margin-top:8px; font-weight:500;">${e.content}</div>` : ''}
+                        ${contentHtml}
                     </div>
                     <div style="text-align:right;">
-                        <div style="color:${color}; font-weight:bold; font-size:16px; margin-bottom:8px;">${sign}$${Number(e.amount).toLocaleString()}</div>
+                        <div style="color:${color}; font-weight:bold; font-size:16px; margin-bottom:8px;">
+                            ${sign}$${displayAmt.toLocaleString()}
+                            ${displayAmt !== Number(e.amount) ? `<div style="font-size:10px; color:#999; margin-top:2px;">(總額 $${Number(e.amount).toLocaleString()})</div>` : ''}
+                        </div>
                         <div style="display:flex; gap:8px; justify-content:flex-end;">
                             <button class="icon-btn-gray" style="font-size:13px; background:#f5f5f5; padding:4px 8px; border-radius:4px;" onclick="editExpense('${e.id}')">✎</button>
                             <button class="icon-btn-red" style="font-size:13px; background:#ffebee; padding:4px 8px; border-radius:4px;" onclick="deleteExpense('${e.id}')">✕</button>
@@ -1521,7 +1675,7 @@ window.openChartDetail = function(label) {
 };
 
 // ==========================================
-// 比較頁面渲染邏輯 (加入嚴謹的平均計算與標籤防重疊)
+// 比較頁面渲染邏輯
 // ==========================================
 window.renderComparePage = function() {
     const baseYearStr = document.getElementById('compareBaseYear').value;
@@ -1532,7 +1686,6 @@ window.renderComparePage = function() {
     
     if(!summaryContainer || !chartContainer) return;
 
-    // 🌟 取得比較頁面的「區分使用者」多選狀態
     const selectedCompareUsers = window.getSelectedCompareUsers();
     const isTotalMode = selectedCompareUsers.includes('總和 (不區分)');
 
@@ -1540,19 +1693,28 @@ window.renderComparePage = function() {
     let cardTitle = "";
     let datasets = [];
 
-    // 🌟 比較頁只抓「支出」，且排除繳卡
-    let expenses = validExpenseData.filter(e => 
-        e.type === '支出' && 
-        !(e.mainCategory === '信用卡' && e.subCategory === '繳信用卡')
-    ); 
+    let expenses = validExpenseData.filter(e => e.type === '支出'); 
 
     const showCheckout = document.getElementById('compareShowCheckout') ? document.getElementById('compareShowCheckout').checked : false;
     if (!showCheckout) {
         expenses = expenses.filter(e => !isCheckoutRecord(e));
     }
     
-    // 🌟 比較頁強制排除轉帳
-    expenses = expenses.filter(e => e.mainCategory !== '轉帳');
+    const showTransfer = document.getElementById('compareShowTransfer') ? document.getElementById('compareShowTransfer').checked : false;
+    if (!showTransfer) {
+        expenses = expenses.filter(e => e.mainCategory !== '轉帳');
+        expenses = expenses.filter(e => !(e.mainCategory === '信用卡' && e.subCategory === '繳信用卡'));
+    }
+
+    const showUnrepaid = document.getElementById('compareShowUnrepaid') ? document.getElementById('compareShowUnrepaid').checked : false;
+    if (showUnrepaid) {
+        expenses = expenses.filter(e => {
+            let tUsers = (e.targetUser || e.user).split(',').map(x=>x.trim()).filter(x=>x);
+            let isShared = tUsers.length > 1 || (tUsers.length === 1 && tUsers[0] !== e.user);
+            let isRepaid = e.isRepaid === true || e.isRepaid === 'true';
+            return isShared && !isRepaid;
+        });
+    }
 
     let uniqueYears = [];
     if (compareMode === 'currentYearMonth') {
@@ -1569,7 +1731,6 @@ window.renderComparePage = function() {
         xLabels = uniqueYears.map(y => y + "年");
     }
 
-    // 🌟 產生時間檢查陣列 (如果當月未結束，則不列入算平均的分母)
     const now = new Date();
     const currentY = now.getFullYear();
     const currentM = now.getMonth() + 1;
@@ -1622,14 +1783,19 @@ window.renderComparePage = function() {
             } else {
                 let splitAmt = Number(e.amount) / Math.max(tUsers.length, 1);
                 tUsers.forEach(tUser => {
-                    if (userMap[tUser]) userMap[tUser][index] += splitAmt;
+                    if (userMap[tUser]) {
+                        if (tUser === '共用') {
+                            userMap[tUser][index] += Number(e.amount) / 2;
+                        } else {
+                            userMap[tUser][index] += splitAmt;
+                        }
+                    }
                 });
             }
         }
     });
 
     let globalTotal = 0;
-    // 建立一個追蹤總體數據各節點陣列，用於計算「總時間節點平均」
     let globalDataArr = new Array(xLabels.length).fill(0);
 
     for (const [key, dataArr] of Object.entries(userMap)) {
@@ -1654,16 +1820,14 @@ window.renderComparePage = function() {
 
     renderSvgChart(chartContainer, xLabels, datasets);
 
-    // 🌟 計算圖表總計的平均 (嚴格排除未結束時間的數據)
     let globalAvgTotal = 0;
     let globalAvgCount = 0;
     globalDataArr.forEach((v, i) => {
-        if (validIndices[i] && v > 0) {
+        if (validIndices[i] && v > 0) { 
             globalAvgTotal += v;
             globalAvgCount++;
         }
     });
-    // 防呆：如果全都是未結束的時間（例如只單看當下月份），那就退回把有數字的都平均起來
     if (globalAvgCount === 0 && globalTotal > 0) {
         globalDataArr.forEach((v, i) => {
             if (v > 0) {
@@ -1674,11 +1838,13 @@ window.renderComparePage = function() {
     }
     let avg = globalAvgCount > 0 ? Math.round(globalAvgTotal / globalAvgCount) : 0;
     
+    let labelPrefix = showUnrepaid ? "未還" : "總";
+
     let summaryHtml = `
         <div class="compare-card" style="margin-bottom:10px;">
             <div class="compare-card-title">${cardTitle}</div>
             <div class="compare-row main">
-                <span class="compare-label">圖表總支出</span>
+                <span class="compare-label">圖表${labelPrefix}支出</span>
                 <span class="compare-val-main">$${globalTotal.toLocaleString()}</span>
             </div>
             <div class="compare-row" style="${!isTotalMode ? 'margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px dashed #ccc;' : ''}">
@@ -1687,7 +1853,6 @@ window.renderComparePage = function() {
             </div>
     `;
 
-    // 🌟 多位使用者模式時，列出個別數據與其專屬的有效平均
     if (!isTotalMode && datasets.length > 0) {
         summaryHtml += `<div style="font-size: 13px; color: #666; font-weight: bold; margin-bottom: 8px;">各別統計：</div>`;
         datasets.forEach(ds => {
@@ -1696,7 +1861,7 @@ window.renderComparePage = function() {
             let dsAvgTotal = 0;
             let dsAvgCount = 0;
             ds.data.forEach((v, i) => {
-                if (validIndices[i] && v > 0) {
+                if (validIndices[i] && v > 0) { 
                     dsAvgTotal += v;
                     dsAvgCount++;
                 }
@@ -1727,7 +1892,7 @@ window.renderComparePage = function() {
     summaryContainer.innerHTML = summaryHtml;
 };
 
-// 🌟 SVG 圖表繪製與防止標籤重疊處理
+// SVG 圖表繪製
 function renderSvgChart(container, xLabels, datasets) {
     const width = container.clientWidth || 300;
     const height = 240;
@@ -1742,7 +1907,6 @@ function renderSvgChart(container, xLabels, datasets) {
 
     let svg = `<svg width="100%" height="${height}">`;
 
-    // 畫背景橫線與左側 Y 軸標籤
     for(let i=0; i<=4; i++) {
         let y = padY + chartH - (i/4)*chartH;
         let val = Math.round((i/4)*maxVal);
@@ -1750,7 +1914,6 @@ function renderSvgChart(container, xLabels, datasets) {
         svg += `<text x="${padX-5}" y="${y+4}" font-size="10" text-anchor="end" fill="#999">${val.toLocaleString()}</text>`;
     }
 
-    // 畫 X 軸標籤
     let step = Math.ceil(xLabels.length / 6);
     xLabels.forEach((lbl, i) => {
         let x = padX + (i / (xLabels.length - 1)) * chartW;
@@ -1759,7 +1922,6 @@ function renderSvgChart(container, xLabels, datasets) {
         }
     });
 
-    // 畫資料線條與節點圓圈
     datasets.forEach(ds => {
         let points = ds.data.map((val, i) => {
             let x = padX + (i / (xLabels.length - 1)) * chartW;
@@ -1777,11 +1939,9 @@ function renderSvgChart(container, xLabels, datasets) {
         });
     });
 
-    // 🌟 文字標籤防重疊處理 (限定節點不超過 12 個才顯示數字)
     if (datasets.length > 0 && datasets[0].data.length <= 12) {
         let labelsToDraw = [];
         
-        // 1. 蒐集每個 X 軸點上要畫的文字與原始 Y 座標
         datasets.forEach(ds => {
             ds.data.forEach((val, i) => {
                 if(val === 0 && ds.data.length > 12) return;
@@ -1792,22 +1952,18 @@ function renderSvgChart(container, xLabels, datasets) {
             });
         });
 
-        // 2. 針對同一垂直線上過度密集的文字進行推擠 (錯開)
         labelsToDraw.forEach(colLabels => {
             if(!colLabels) return;
-            // 排序: Y值由大排到小 (畫面上的由下到上，數字越小排越前面處理)
             colLabels.sort((a,b) => b.y - a.y); 
             
             for(let j = 1; j < colLabels.length; j++) {
                 let prev = colLabels[j-1];
                 let curr = colLabels[j];
-                // 如果這個文字距離下方的文字距離 < 14px，就把它往上推
                 if((prev.y - curr.y) < 14) {
                     curr.y = prev.y - 14;
                 }
             }
             
-            // 3. 實際將位移後的文字畫出
             colLabels.forEach(lbl => {
                 svg += `<text x="${lbl.x}" y="${lbl.y-10}" font-size="10" text-anchor="middle" font-weight="bold" fill="${lbl.color}" style="text-shadow: 1px 1px 0 #fff, -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff;">$${lbl.val.toLocaleString()}</text>`;
             });
@@ -1816,7 +1972,6 @@ function renderSvgChart(container, xLabels, datasets) {
 
     svg += `</svg>`;
 
-    // 畫底部圖例 (Legend)
     let legendHtml = '';
     if (datasets.length > 1) {
         legendHtml = '<div style="display:flex; justify-content:center; flex-wrap:wrap; gap:12px; margin-top:10px; padding:0 15px;">';
@@ -1884,6 +2039,9 @@ window.editExpense = function(id) {
     document.querySelector('input[name="amount"]').value = exp.amount;
     document.getElementById('payMethod').value = exp.payMethod || '存款'; 
     document.querySelector('input[name="content"]').value = exp.content || '';
+    
+    // 讀取是否已還款
+    document.getElementById('isRepaidCheckbox').checked = (exp.isRepaid === true || exp.isRepaid === 'true');
 
     let userSel = document.getElementById('user');
     if(appData['使用者'].find(u => u.name === exp.user)) userSel.value = exp.user;
@@ -1943,6 +2101,9 @@ document.getElementById('expenseForm').onsubmit = async function(e) {
     
     if (!data.targetUser) data.targetUser = data.user;
     data.ledgerName = document.getElementById('globalLedgerSelect').value;
+    // 儲存已還款狀態
+    data.isRepaid = document.getElementById('isRepaidCheckbox').checked;
+
     const docId = data.id.toString(); 
 
     data.type = data.type === 'income' ? '收入' : '支出';
@@ -2038,6 +2199,7 @@ document.getElementById('manageItemForm').onsubmit = async function(e) {
     }
 };
 
+// 🌟 管理分頁邏輯餘額計算 (真實反映付款人的現金流)
 window.getUserBalance = function(userName) {
     let deposit = 0;
     let credit = 0;
@@ -2123,7 +2285,8 @@ window.submitBalanceAdjustment = async function() {
         subCategory: '未選擇小項目',
         project: '',
         content: `手動${type}校正差額`,
-        ledgerName: ledger
+        ledgerName: ledger,
+        isRepaid: false
     };
 
     try {
@@ -2208,63 +2371,5 @@ window.updateFormSubCategory = function() {
         else subSel.value = '';
     } else {
         subSel.innerHTML = `<option value="" disabled selected>無小分類</option>`;
-    }
-};
-
-window.migrateDataFromGAS = async function() {
-    const OLD_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxAlklJVn9ibCGzpOtSF0JnN3mCGVD5Iaw3aYsDcnNUE_Kn6i27qEgOuBWg5JpOK4xTqA/exec';
-    const ledger = document.getElementById('globalLedgerSelect').value;
-
-    if(!confirm(`確定要重新搬移「${ledger}」的資料，修復日期問題嗎？\n(這將會完美覆寫剛剛日期錯誤的資料)`)) return;
-
-    const btn = document.getElementById('migrateBtn');
-    if(btn) { btn.innerText = "努力修復中...⏳"; btn.disabled = true; }
-
-    try {
-        const r = await fetch(OLD_SCRIPT_URL, { method: 'POST', body: JSON.stringify({ action: "getData", ledgerName: ledger }) });
-        const res = await r.json();
-
-        if (res.status === "error") throw new Error(res.message);
-
-        const manageData = res.manageData || [];
-        const expenseData = res.expenseData || [];
-        const promises = []; 
-
-        for (const item of manageData) {
-            promises.push(setDoc(doc(db, "manageData", item.id.toString()), item));
-        }
-
-        for (const item of expenseData) {
-            item.type = item.type === 'income' ? '收入' : (item.type === 'expense' ? '支出' : item.type);
-            item.amount = Number(item.amount) || 0;
-            
-            if (item.date && String(item.date).includes('T')) {
-                let d = new Date(item.date);
-                if (!isNaN(d.getTime())) {
-                    item.date = formatDate(d); 
-                } else {
-                    item.date = String(item.date).substring(0, 10);
-                }
-            } else if (item.date) {
-                item.date = String(item.date).substring(0, 10);
-            }
-            
-            item.ledgerName = ledger;
-            if (!item.targetUser) item.targetUser = item.user;
-
-            promises.push(setDoc(doc(db, "expenses", item.id.toString()), item));
-        }
-
-        await Promise.all(promises);
-
-        alert(`🎉 日期修復大成功！\n資料已經回到正確的日期了！`);
-        
-        if(btn) btn.style.display = "none"; 
-        window.fetchData(); 
-
-    } catch (err) {
-        console.error(err);
-        alert("轉移發生錯誤：" + err.message);
-        if(btn) { btn.innerText = "轉移失敗 ❌"; btn.disabled = false; }
     }
 };
