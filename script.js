@@ -1178,7 +1178,7 @@ window.renderDailyList = function() {
             payBadge = e.payMethod === '信用卡' ? `<span class="detail-project-tag" style="background:#e3f2fd; color:#1565c0; border-color:#bbdefb;">💳 信用卡</span>` : `<span class="detail-project-tag" style="background:#e8f5e9; color:#2e7d32; border-color:#c8e6c9;">💵 存款</span>`;
         }
 
-        // 🌟 勾選框還款按鈕處理
+        // 🌟 勾選框還款按鈕處理 (無框無底色，原生 checkbox 搭配有顏色的文字)
         let repayBadge = '';
         if (isShared && !isTransfer && !isCheckout) {
             let isRepaid = e.isRepaid === true || e.isRepaid === 'true';
@@ -1186,24 +1186,24 @@ window.renderDailyList = function() {
             let statusColor = isRepaid ? '#4CAF50' : '#ef5350';
             
             if (e.isGrouped) {
-                repayBadge = `<span style="color:#999; font-size:12px; font-weight:bold;">[${statusText}] (展開可切換)</span>`;
+                repayBadge = `<span style="color:#999; font-size:13.5px; font-weight:bold; margin-left:6px;">[${statusText}]</span>`;
             } else {
                 repayBadge = `
-                <label style="display:inline-flex; align-items:center; gap:4px; cursor:pointer; margin:0;">
+                <label style="display:inline-flex; align-items:center; gap:4px; cursor:pointer; margin:0 0 0 6px;">
                     <input type="checkbox" style="width:14px; height:14px; margin:0; cursor:pointer;" ${isRepaid ? 'checked' : ''} onchange="toggleRepayStatus('${e.id}', ${isRepaid})">
-                    <span style="color:${statusColor}; font-weight:bold; font-size:13px;">${statusText}</span>
+                    <span style="color:${statusColor}; font-weight:bold; font-size:13.5px;">${statusText}</span>
                 </label>`;
             }
         }
 
-        // 🌟 無備註時不顯示無備註，若有勾選框依然可以顯示
+        // 🌟 單純白底黑字備註，完全靠左 (去除 padding-left: 40px;)
         let contentHtml = '';
         if (e.content || repayBadge) {
-            let textPart = e.content ? `<span style="font-size:13px; color:#555;">📝 ${e.content}</span>` : '';
-            let divider = (e.content && repayBadge) ? `<span style="color:#ccc; font-size:12px;">|</span>` : '';
+            let textPart = e.content ? `<span style="font-size:13.5px; color:#333;">${e.content}</span>` : '';
+            let divider = (e.content && repayBadge) ? `<span style="color:#ccc; font-size:13.5px; margin:0 4px;">|</span>` : '';
             
-            contentHtml = `<div style="margin-top:8px; padding-left:40px;">
-                <div style="background:#fafafa; padding:6px 10px; border-radius:6px; border:1px dashed #ddd; display:inline-flex; align-items:center; flex-wrap:wrap; gap:8px; max-width:100%;">
+            contentHtml = `<div style="margin-top:6px;">
+                <div style="display:inline-flex; align-items:center; flex-wrap:wrap; max-width:100%;">
                     ${textPart}
                     ${divider}
                     ${repayBadge}
@@ -1235,7 +1235,7 @@ window.renderDailyList = function() {
                     </div>
                     ${contentHtml}
                 </div>
-                <div style="text-align:right;">
+                <div style="text-align:right; min-width:70px;">
                     <div style="color:${color}; font-weight:bold; font-size:16px; margin-bottom:4px;">${sign}$${amt.toLocaleString()}</div>
                     <div style="display:flex; gap:8px; justify-content:flex-end; align-items:center;">
                         ${actionsHtml}
@@ -1330,8 +1330,9 @@ window.renderChart = function() {
         filtered = filtered.filter(e => !(e.mainCategory === '信用卡' && e.subCategory === '繳信用卡' && e.type === '支出'));
     }
 
-    const showUnrepaid = document.getElementById('chartShowUnrepaid') ? document.getElementById('chartShowUnrepaid').checked : false;
-    if (showUnrepaid) {
+    // 解決變數重複宣告 (ts2451)
+    const isChartUnrepaid = document.getElementById('chartShowUnrepaid') ? document.getElementById('chartShowUnrepaid').checked : false;
+    if (isChartUnrepaid) {
         filtered = filtered.filter(e => {
             let tUsers = (e.targetUser || e.user).split(',').map(x=>x.trim()).filter(x=>x);
             let isShared = tUsers.length > 1 || (tUsers.length === 1 && tUsers[0] !== e.user);
@@ -1435,7 +1436,7 @@ window.renderChart = function() {
     if (selectedUser !== '全付款人') prefixArr.push(`[${selectedUser}]`);
     let prefixStr = prefixArr.length > 0 ? prefixArr.join('') + ' ' : '';
 
-    let labelPrefix = showUnrepaid ? "未還" : "總";
+    let labelPrefix = isChartUnrepaid ? "未還" : "總";
 
     if (currentChartInOut === '支出') {
         summaryEl.innerText = `${prefixStr}${labelPrefix}支出: $${totalExpense.toLocaleString()}`;
@@ -1519,8 +1520,9 @@ window.openChartDetail = function(label) {
         filtered = filtered.filter(e => !(e.mainCategory === '信用卡' && e.subCategory === '繳信用卡' && e.type === '支出'));
     }
 
-    const showUnrepaid = document.getElementById('chartShowUnrepaid') ? document.getElementById('chartShowUnrepaid').checked : false;
-    if (showUnrepaid) {
+    // 解決變數重複宣告 (ts2451)
+    const isDetailUnrepaid = document.getElementById('chartShowUnrepaid') ? document.getElementById('chartShowUnrepaid').checked : false;
+    if (isDetailUnrepaid) {
         filtered = filtered.filter(e => {
             let tUsers = (e.targetUser || e.user).split(',').map(x=>x.trim()).filter(x=>x);
             let isShared = tUsers.length > 1 || (tUsers.length === 1 && tUsers[0] !== e.user);
@@ -1613,7 +1615,7 @@ window.openChartDetail = function(label) {
                 });
             }
 
-            // 🌟 統計明細中的還款勾選框與備註整合
+            // 🌟 統計明細中的還款勾選框 (原生 checkbox, 白底黑字)
             let repayBadge = '';
             if (isShared && e.mainCategory !== '轉帳' && !isCheckoutRecord(e)) {
                 let isRepaid = e.isRepaid === true || e.isRepaid === 'true';
@@ -1621,20 +1623,20 @@ window.openChartDetail = function(label) {
                 let statusColor = isRepaid ? '#4CAF50' : '#ef5350';
                 
                 repayBadge = `
-                <label style="display:inline-flex; align-items:center; gap:4px; cursor:pointer; margin:0;">
+                <label style="display:inline-flex; align-items:center; gap:4px; cursor:pointer; margin:0 0 0 6px;">
                     <input type="checkbox" style="width:14px; height:14px; margin:0; cursor:pointer;" ${isRepaid ? 'checked' : ''} onchange="toggleRepayStatus('${e.id}', ${isRepaid})">
-                    <span style="color:${statusColor}; font-weight:bold; font-size:13px;">${statusText}</span>
+                    <span style="color:${statusColor}; font-weight:bold; font-size:13.5px;">${statusText}</span>
                 </label>`;
             }
 
-            // 🌟 無備註時不顯示無備註，若有勾選框依然可以顯示
+            // 🌟 備註純文字靠左對齊，無圖示無外框 (去除 padding-left)
             let contentHtml = '';
             if (e.content || repayBadge) {
-                let textPart = e.content ? `<span style="font-size:13px; color:#555;">📝 ${e.content}</span>` : '';
-                let divider = (e.content && repayBadge) ? `<span style="color:#ccc; font-size:12px;">|</span>` : '';
+                let textPart = e.content ? `<span style="font-size:13.5px; color:#333;">${e.content}</span>` : '';
+                let divider = (e.content && repayBadge) ? `<span style="color:#ccc; font-size:13.5px; margin:0 4px;">|</span>` : '';
                 
-                contentHtml = `<div style="margin-top:8px;">
-                    <div style="background:#fafafa; padding:6px 10px; border-radius:6px; border:1px dashed #ddd; display:inline-flex; align-items:center; flex-wrap:wrap; gap:8px; max-width:100%;">
+                contentHtml = `<div style="margin-top:6px;">
+                    <div style="display:inline-flex; align-items:center; flex-wrap:wrap; max-width:100%;">
                         ${textPart}
                         ${divider}
                         ${repayBadge}
@@ -1655,7 +1657,7 @@ window.openChartDetail = function(label) {
                         </div>
                         ${contentHtml}
                     </div>
-                    <div style="text-align:right;">
+                    <div style="text-align:right; min-width:70px;">
                         <div style="color:${color}; font-weight:bold; font-size:16px; margin-bottom:8px;">
                             ${sign}$${displayAmt.toLocaleString()}
                             ${displayAmt !== Number(e.amount) ? `<div style="font-size:10px; color:#999; margin-top:2px;">(總額 $${Number(e.amount).toLocaleString()})</div>` : ''}
@@ -1706,8 +1708,9 @@ window.renderComparePage = function() {
         expenses = expenses.filter(e => !(e.mainCategory === '信用卡' && e.subCategory === '繳信用卡'));
     }
 
-    const showUnrepaid = document.getElementById('compareShowUnrepaid') ? document.getElementById('compareShowUnrepaid').checked : false;
-    if (showUnrepaid) {
+    // 解決變數重複宣告 (ts2451)
+    const isCompareUnrepaid = document.getElementById('compareShowUnrepaid') ? document.getElementById('compareShowUnrepaid').checked : false;
+    if (isCompareUnrepaid) {
         expenses = expenses.filter(e => {
             let tUsers = (e.targetUser || e.user).split(',').map(x=>x.trim()).filter(x=>x);
             let isShared = tUsers.length > 1 || (tUsers.length === 1 && tUsers[0] !== e.user);
@@ -1838,7 +1841,7 @@ window.renderComparePage = function() {
     }
     let avg = globalAvgCount > 0 ? Math.round(globalAvgTotal / globalAvgCount) : 0;
     
-    let labelPrefix = showUnrepaid ? "未還" : "總";
+    let labelPrefix = isCompareUnrepaid ? "未還" : "總";
 
     let summaryHtml = `
         <div class="compare-card" style="margin-bottom:10px;">
