@@ -36,7 +36,7 @@ const compareColors = ['#F44336', '#2196F3', '#4CAF50', '#FF9800', '#9C27B0'];
 
 let isGroupedView = false;
 let currentAdjustUser = '';
-let currentSysBalances = { deposit: 0, credit: 0 };
+let currentSysBalances = { cash: 0, bank: 0, credit: 0 };
 
 // ==========================================
 // CSV 匯出 / 匯入邏輯
@@ -193,15 +193,31 @@ window.importDataFromCSV = async function(event) {
 };
 
 // ==========================================
-// 快速切換還款狀態
+// 🚀 快速切換還款狀態
 // ==========================================
-window.toggleRepayStatus = async function(id, currentStatus) {
-    try {
-        await setDoc(doc(db, "expenses", String(id)), { isRepaid: !currentStatus }, { merge: true });
-        window.fetchData(); 
-    } catch(err) {
-        alert("狀態更新失敗：" + err.message);
+window.toggleRepayStatus = function(id, currentStatus) {
+    let newStatus = !currentStatus;
+    
+    // 樂觀更新
+    let exp = validExpenseData.find(e => e.id.toString() === String(id));
+    if (exp) {
+        exp.isRepaid = newStatus;
+        exp.isRepaidBool = newStatus;
     }
+
+    if (document.getElementById('page-home').classList.contains('active')) window.renderDailyList();
+    if (document.getElementById('page-charts').classList.contains('active')) window.renderChart();
+    if (document.getElementById('page-chart-detail').classList.contains('active')) window.openChartDetail(currentChartDetailLabel);
+    if (document.getElementById('page-compare').classList.contains('active')) window.renderComparePage();
+
+    setDoc(doc(db, "expenses", String(id)), { isRepaid: newStatus }, { merge: true }).catch(err => {
+        console.error("狀態更新失敗：", err);
+        if (exp) {
+            exp.isRepaid = currentStatus;
+            exp.isRepaidBool = currentStatus;
+        }
+        window.renderDailyList();
+    });
 };
 
 // ==========================================
@@ -383,7 +399,14 @@ window.fetchData = async function() {
                     e.date = dateStr.substring(0, 10);
                 }
             }
-            e.payMethod = String(e.payMethod || '存款');
+            // 轉換舊有的 '存款' 為 '銀行'
+            e.payMethod = String(e.payMethod || '現金');
+            if (e.payMethod === '存款') e.payMethod = '銀行';
+
+            let rawTarget = e.targetUser || e.user || '';
+            e.parsedTargets = rawTarget.split(',').map(x=>x.trim()).filter(x=>x);
+            e.isShared = e.parsedTargets.length > 1 || (e.parsedTargets.length === 1 && e.parsedTargets[0] !== e.user);
+            e.isRepaidBool = e.isRepaid === true || e.isRepaid === 'true';
 
             let reason = getExceptionReason(e);
             if (reason) { e.exceptionReason = reason; exceptionExpenseData.push(e); } 
@@ -476,7 +499,7 @@ function getExceptionReason(exp) {
     let reasons = [];
     if (!appData['使用者'].find(u => u.name === exp.user)) reasons.push("付款人");
     
-    let tUsers = (exp.targetUser || exp.user).split(',').map(x=>x.trim()).filter(x=>x);
+    let tUsers = exp.parsedTargets || [];
     let invalidTarget = tUsers.find(tu => !appData['使用者'].find(u => u.name === tu));
     if (invalidTarget) reasons.push("被使用者");
     
@@ -656,7 +679,7 @@ function initUI() {
         document.getElementById('expenseOperation').value = 'add';
         document.getElementById('submitBtn').innerText = '儲存新增';
         document.getElementById('date').value = selectedDateStr; 
-        document.getElementById('payMethod').value = '存款'; 
+        document.getElementById('payMethod').value = '現金'; 
         document.getElementById('isRepaidCheckbox').checked = false;
         window.updateFormDropdowns();
         document.getElementById('addModal').style.display = 'flex';
@@ -697,7 +720,7 @@ function initUI() {
         adjInput.addEventListener('input', function() {
             let actual = Number(this.value) || 0;
             let type = document.getElementById('adjAccountType').value;
-            let sysBal = type === '存款' ? currentSysBalances.deposit : currentSysBalances.credit;
+            let sysBal = type === '現金' ? currentSysBalances.cash : (type === '銀行' ? currentSysBalances.bank : currentSysBalances.credit);
             
             let diff = actual - sysBal;
             let display = document.getElementById('adjDiffDisplay');
@@ -782,8 +805,7 @@ function updateChartDropdowns() {
 
     let uniqueTargets = new Set();
     validExpenseData.forEach(e => { 
-        let t = e.targetUser || e.user; 
-        t.split(',').forEach(tu => uniqueTargets.add(tu.trim()));
+        if(e.parsedTargets) e.parsedTargets.forEach(tu => uniqueTargets.add(tu));
     });
     
     let targetOptionsHtml = '';
@@ -1000,7 +1022,8 @@ window.renderManageLists = function() {
     
     const userContainer = document.getElementById('userList');
     if(userContainer) {
-        let totalAllDeposit = 0;
+        let totalAllCash = 0;
+        let totalAllBank = 0;
         let totalAllCredit = 0; 
         
         let activeUsers = JSON.parse(localStorage.getItem('activeUsersForTotal'));
@@ -1015,7 +1038,8 @@ window.renderManageLists = function() {
             const isChecked = activeUsers.includes(item.name);
             
             if (isChecked) {
-                totalAllDeposit += balances.deposit; 
+                totalAllCash += balances.cash; 
+                totalAllBank += balances.bank;
                 totalAllCredit += balances.credit;
             }
             
@@ -1027,7 +1051,8 @@ window.renderManageLists = function() {
                     <div class="item-content">
                         <div style="font-size:16px;">${item.name}</div>
                         <div style="font-size:13px; color:#888; margin-top:3px; display:flex; gap:10px;">
-                            <span>存款: <span style="color:${balances.deposit>=0?'#4CAF50':'#ef5350'}; font-weight:bold;">$${balances.deposit.toLocaleString()}</span></span>
+                            <span>現金: <span style="color:${balances.cash>=0?'#4CAF50':'#ef5350'}; font-weight:bold;">$${balances.cash.toLocaleString()}</span></span>
+                            <span>銀行: <span style="color:${balances.bank>=0?'#4CAF50':'#ef5350'}; font-weight:bold;">$${balances.bank.toLocaleString()}</span></span>
                             <span>信用卡: <span style="color:${balances.credit>=0?'#1976d2':'#ef5350'}; font-weight:bold;">$${balances.credit.toLocaleString()}</span></span>
                         </div>
                     </div>
@@ -1043,12 +1068,17 @@ window.renderManageLists = function() {
         let totalHtml = `
         <div style="background:#e3f2fd; border:1px solid #bbdefb; padding:12px; border-radius:8px; margin-bottom:15px; display:flex; justify-content:space-around; align-items:center;">
             <div style="text-align:center;">
-                <div style="font-weight:bold; color:#1565c0; font-size:13px;">系統總存款</div>
-                <div style="font-size:18px; font-weight:bold; color:#1976d2;">$${totalAllDeposit.toLocaleString()}</div>
+                <div style="font-weight:bold; color:#1565c0; font-size:13px;">總現金</div>
+                <div style="font-size:18px; font-weight:bold; color:#1976d2;">$${totalAllCash.toLocaleString()}</div>
             </div>
             <div style="width:1px; background:#bbdefb; height:30px;"></div>
             <div style="text-align:center;">
-                <div style="font-weight:bold; color:#1565c0; font-size:13px;">信用卡總可用額度</div>
+                <div style="font-weight:bold; color:#1565c0; font-size:13px;">總銀行</div>
+                <div style="font-size:18px; font-weight:bold; color:#1976d2;">$${totalAllBank.toLocaleString()}</div>
+            </div>
+            <div style="width:1px; background:#bbdefb; height:30px;"></div>
+            <div style="text-align:center;">
+                <div style="font-weight:bold; color:#1565c0; font-size:13px;">總信用卡</div>
                 <div style="font-size:18px; font-weight:bold; color:#1976d2;">$${totalAllCredit.toLocaleString()}</div>
             </div>
         </div>`;
@@ -1114,7 +1144,7 @@ window.renderDailyList = function() {
     if (isGroupedView) {
         let grouped = {};
         dailyData.forEach(e => {
-            let key = `${e.type}_${e.mainCategory}_${e.subCategory}_${e.user}_${e.targetUser}_${e.project}_${e.payMethod}_${e.isRepaid}`;
+            let key = `${e.type}_${e.mainCategory}_${e.subCategory}_${e.user}_${e.targetUser}_${e.project}_${e.payMethod}_${e.isRepaidBool}`;
             if (!grouped[key]) {
                 grouped[key] = { ...e, amount: 0, count: 0, contents: [] };
             }
@@ -1157,8 +1187,8 @@ window.renderDailyList = function() {
         const emoji = getIcon(e.mainCategory, '大分類');
         const userStyle = getUserColorStyle(e.user); 
         
-        let tUsers = (e.targetUser || e.user).split(',').map(x=>x.trim()).filter(x=>x);
-        let isShared = tUsers.length > 1 || (tUsers.length === 1 && tUsers[0] !== e.user);
+        let tUsers = e.parsedTargets || [];
+        let isShared = e.isShared;
         
         let targetHtml = '';
         let nonSelfTargets = tUsers.filter(tu => tu !== e.user);
@@ -1175,13 +1205,19 @@ window.renderDailyList = function() {
         } else if (isCheckout) {
             payBadge = `<span class="detail-project-tag" style="background:#e0f7fa; color:#006064; border-color:#b2ebf2;">📝 系統結帳</span>`;
         } else {
-            payBadge = e.payMethod === '信用卡' ? `<span class="detail-project-tag" style="background:#e3f2fd; color:#1565c0; border-color:#bbdefb;">💳 信用卡</span>` : `<span class="detail-project-tag" style="background:#e8f5e9; color:#2e7d32; border-color:#c8e6c9;">💵 存款</span>`;
+            if (e.payMethod === '信用卡') {
+                payBadge = `<span class="detail-project-tag" style="background:#e3f2fd; color:#1565c0; border-color:#bbdefb;">💳 信用卡</span>`;
+            } else if (e.payMethod === '銀行') {
+                payBadge = `<span class="detail-project-tag" style="background:#e8f5e9; color:#2e7d32; border-color:#c8e6c9;">🏦 銀行</span>`;
+            } else {
+                payBadge = `<span class="detail-project-tag" style="background:#fff3e0; color:#e65100; border-color:#ffe0b2;">💵 現金</span>`;
+            }
         }
 
-        // 🌟 勾選框還款按鈕處理 (無框無底色，原生 checkbox 搭配有顏色的文字)
+        // 🌟 勾選框還款按鈕處理 (整合在第一行標籤列)
         let repayBadge = '';
         if (isShared && !isTransfer && !isCheckout) {
-            let isRepaid = e.isRepaid === true || e.isRepaid === 'true';
+            let isRepaid = e.isRepaidBool;
             let statusText = isRepaid ? '已還' : '未還';
             let statusColor = isRepaid ? '#4CAF50' : '#ef5350';
             
@@ -1196,19 +1232,10 @@ window.renderDailyList = function() {
             }
         }
 
-        // 🌟 單純白底黑字備註，完全靠左 (去除 padding-left: 40px;)
+        // 🌟 備註純文字靠左對齊，無圖示無外框
         let contentHtml = '';
-        if (e.content || repayBadge) {
-            let textPart = e.content ? `<span style="font-size:13.5px; color:#333;">${e.content}</span>` : '';
-            let divider = (e.content && repayBadge) ? `<span style="color:#ccc; font-size:13.5px; margin:0 4px;">|</span>` : '';
-            
-            contentHtml = `<div style="margin-top:6px;">
-                <div style="display:inline-flex; align-items:center; flex-wrap:wrap; max-width:100%;">
-                    ${textPart}
-                    ${divider}
-                    ${repayBadge}
-                </div>
-            </div>`;
+        if (e.content) {
+            contentHtml = `<div style="margin-top:6px; font-size:13.5px; color:#333; line-height:1.4;">${e.content}</div>`;
         }
 
         let actionsHtml = '';
@@ -1232,6 +1259,7 @@ window.renderDailyList = function() {
                         ${projectHtml}
                         <span class="detail-user-tag" style="${userStyle}">${e.user}</span>
                         ${targetHtml}
+                        ${repayBadge}
                     </div>
                     ${contentHtml}
                 </div>
@@ -1270,7 +1298,7 @@ window.renderExceptionList = function() {
     list.innerHTML = exceptionExpenseData.map(e => {
         const userStyle = getUserColorStyle(e.user);
         
-        let tUsers = (e.targetUser || e.user).split(',').map(x=>x.trim()).filter(x=>x);
+        let tUsers = e.parsedTargets || [];
         let targetHtml = '';
         let nonSelfTargets = tUsers.filter(tu => tu !== e.user);
         if (nonSelfTargets.length > 0) {
@@ -1330,14 +1358,10 @@ window.renderChart = function() {
         filtered = filtered.filter(e => !(e.mainCategory === '信用卡' && e.subCategory === '繳信用卡' && e.type === '支出'));
     }
 
-    // 解決變數重複宣告 (ts2451)
     const isChartUnrepaid = document.getElementById('chartShowUnrepaid') ? document.getElementById('chartShowUnrepaid').checked : false;
     if (isChartUnrepaid) {
         filtered = filtered.filter(e => {
-            let tUsers = (e.targetUser || e.user).split(',').map(x=>x.trim()).filter(x=>x);
-            let isShared = tUsers.length > 1 || (tUsers.length === 1 && tUsers[0] !== e.user);
-            let isRepaid = e.isRepaid === true || e.isRepaid === 'true';
-            return isShared && !isRepaid;
+            return e.isShared && !e.isRepaidBool;
         });
     }
 
@@ -1350,7 +1374,7 @@ window.renderChart = function() {
     
     if (selectedTargets.length > 0 && !selectedTargets.includes('全被使用者')) {
         filtered = filtered.filter(e => {
-            let tUsers = (e.targetUser || e.user).split(',').map(x=>x.trim()); 
+            let tUsers = e.parsedTargets || [];
             return tUsers.some(tu => selectedTargets.includes(tu));
         });
     }
@@ -1392,7 +1416,7 @@ window.renderChart = function() {
         let subKey = e.subCategory || '未分類';
         
         let amt = Number(e.amount) || 0;
-        let tUsers = (e.targetUser || e.user).split(',').map(x=>x.trim()).filter(x=>x);
+        let tUsers = e.parsedTargets || [];
         let splitAmt = amt / Math.max(tUsers.length, 1);
         let effectiveAmt = amt;
 
@@ -1520,14 +1544,10 @@ window.openChartDetail = function(label) {
         filtered = filtered.filter(e => !(e.mainCategory === '信用卡' && e.subCategory === '繳信用卡' && e.type === '支出'));
     }
 
-    // 解決變數重複宣告 (ts2451)
     const isDetailUnrepaid = document.getElementById('chartShowUnrepaid') ? document.getElementById('chartShowUnrepaid').checked : false;
     if (isDetailUnrepaid) {
         filtered = filtered.filter(e => {
-            let tUsers = (e.targetUser || e.user).split(',').map(x=>x.trim()).filter(x=>x);
-            let isShared = tUsers.length > 1 || (tUsers.length === 1 && tUsers[0] !== e.user);
-            let isRepaid = e.isRepaid === true || e.isRepaid === 'true';
-            return isShared && !isRepaid;
+            return e.isShared && !e.isRepaidBool;
         });
     }
 
@@ -1540,7 +1560,7 @@ window.openChartDetail = function(label) {
     
     if (selectedTargets.length > 0 && !selectedTargets.includes('全被使用者')) {
         filtered = filtered.filter(e => {
-            let tUsers = (e.targetUser || e.user).split(',').map(x=>x.trim()); 
+            let tUsers = e.parsedTargets || [];
             return tUsers.some(tu => selectedTargets.includes(tu));
         });
     }
@@ -1588,8 +1608,8 @@ window.openChartDetail = function(label) {
             const sign = e.type === '收入' ? '+' : '-';
             const userStyle = getUserColorStyle(e.user);
             
-            let tUsers = (e.targetUser || e.user).split(',').map(x=>x.trim()).filter(x=>x);
-            let isShared = tUsers.length > 1 || (tUsers.length === 1 && tUsers[0] !== e.user);
+            let tUsers = e.parsedTargets || [];
+            let isShared = e.isShared;
 
             let targetHtml = '';
             let nonSelfTargets = tUsers.filter(tu => tu !== e.user);
@@ -1615,10 +1635,10 @@ window.openChartDetail = function(label) {
                 });
             }
 
-            // 🌟 統計明細中的還款勾選框 (原生 checkbox, 白底黑字)
+            // 🌟 統計明細中的還款勾選框 (整合在第一行標籤列)
             let repayBadge = '';
             if (isShared && e.mainCategory !== '轉帳' && !isCheckoutRecord(e)) {
-                let isRepaid = e.isRepaid === true || e.isRepaid === 'true';
+                let isRepaid = e.isRepaidBool;
                 let statusText = isRepaid ? '已還' : '未還';
                 let statusColor = isRepaid ? '#4CAF50' : '#ef5350';
                 
@@ -1629,19 +1649,10 @@ window.openChartDetail = function(label) {
                 </label>`;
             }
 
-            // 🌟 備註純文字靠左對齊，無圖示無外框 (去除 padding-left)
+            // 🌟 備註純文字靠左對齊，無圖示無外框
             let contentHtml = '';
-            if (e.content || repayBadge) {
-                let textPart = e.content ? `<span style="font-size:13.5px; color:#333;">${e.content}</span>` : '';
-                let divider = (e.content && repayBadge) ? `<span style="color:#ccc; font-size:13.5px; margin:0 4px;">|</span>` : '';
-                
-                contentHtml = `<div style="margin-top:6px;">
-                    <div style="display:inline-flex; align-items:center; flex-wrap:wrap; max-width:100%;">
-                        ${textPart}
-                        ${divider}
-                        ${repayBadge}
-                    </div>
-                </div>`;
+            if (e.content) {
+                contentHtml = `<div style="margin-top:6px; font-size:13.5px; color:#333; line-height:1.4;">${e.content}</div>`;
             }
 
             return `
@@ -1654,6 +1665,7 @@ window.openChartDetail = function(label) {
                             ${projectHtml}
                             <span class="detail-user-tag" style="${userStyle}">${e.user}</span>
                             ${targetHtml}
+                            ${repayBadge}
                         </div>
                         ${contentHtml}
                     </div>
@@ -1708,14 +1720,10 @@ window.renderComparePage = function() {
         expenses = expenses.filter(e => !(e.mainCategory === '信用卡' && e.subCategory === '繳信用卡'));
     }
 
-    // 解決變數重複宣告 (ts2451)
     const isCompareUnrepaid = document.getElementById('compareShowUnrepaid') ? document.getElementById('compareShowUnrepaid').checked : false;
     if (isCompareUnrepaid) {
         expenses = expenses.filter(e => {
-            let tUsers = (e.targetUser || e.user).split(',').map(x=>x.trim()).filter(x=>x);
-            let isShared = tUsers.length > 1 || (tUsers.length === 1 && tUsers[0] !== e.user);
-            let isRepaid = e.isRepaid === true || e.isRepaid === 'true';
-            return isShared && !isRepaid;
+            return e.isShared && !e.isRepaidBool;
         });
     }
 
@@ -1780,7 +1788,7 @@ window.renderComparePage = function() {
         }
 
         if(index !== -1) {
-            let tUsers = (e.targetUser || e.user).split(',').map(x=>x.trim());
+            let tUsers = e.parsedTargets || [];
             if (isTotalMode) {
                 userMap['總計支出'][index] += Number(e.amount);
             } else {
@@ -2044,7 +2052,7 @@ window.editExpense = function(id) {
     document.querySelector('input[name="content"]').value = exp.content || '';
     
     // 讀取是否已還款
-    document.getElementById('isRepaidCheckbox').checked = (exp.isRepaid === true || exp.isRepaid === 'true');
+    document.getElementById('isRepaidCheckbox').checked = (exp.isRepaidBool);
 
     let userSel = document.getElementById('user');
     if(appData['使用者'].find(u => u.name === exp.user)) userSel.value = exp.user;
@@ -2204,29 +2212,42 @@ document.getElementById('manageItemForm').onsubmit = async function(e) {
 
 // 🌟 管理分頁邏輯餘額計算 (真實反映付款人的現金流)
 window.getUserBalance = function(userName) {
-    let deposit = 0;
+    let cash = 0;
+    let bank = 0;
     let credit = 0;
     
     validExpenseData.forEach(e => {
         let amt = Number(e.amount) || 0;
-        let method = e.payMethod || '存款';
+        let method = e.payMethod || '現金';
+        if(method === '存款') method = '銀行';
         let isTransfer = (e.mainCategory === '轉帳'); 
 
         if (isTransfer) {
-            if (e.user === userName) deposit -= amt;
-            let tUsers = (e.targetUser || e.user).split(',').map(x=>x.trim());
+            if (e.user === userName) {
+                if (method === '銀行') bank -= amt;
+                else if (method === '信用卡') credit -= amt;
+                else cash -= amt;
+            }
+            let tUsers = e.parsedTargets || [];
             if (tUsers.includes(userName) && e.user !== userName) {
-                deposit += (amt / Math.max(tUsers.length, 1));
+                let split = (amt / Math.max(tUsers.length, 1));
+                if (method === '銀行') bank += split;
+                else if (method === '信用卡') credit += split;
+                else cash += split;
             }
         } else {
             if (e.user === userName) {
-                if (method === '存款') {
-                    if (e.type === '收入') deposit += amt;
+                if (method === '現金') {
+                    if (e.type === '收入') cash += amt;
                     else if (e.type === '支出') {
-                        deposit -= amt;
-                        if (e.mainCategory === '信用卡' && e.subCategory === '繳信用卡') {
-                            credit += amt; 
-                        }
+                        cash -= amt;
+                        if (e.mainCategory === '信用卡' && e.subCategory === '繳信用卡') credit += amt; 
+                    }
+                } else if (method === '銀行') {
+                    if (e.type === '收入') bank += amt;
+                    else if (e.type === '支出') {
+                        bank -= amt;
+                        if (e.mainCategory === '信用卡' && e.subCategory === '繳信用卡') credit += amt; 
                     }
                 } else if (method === '信用卡') {
                     if (e.type === '收入') credit += amt; 
@@ -2235,7 +2256,7 @@ window.getUserBalance = function(userName) {
             }
         }
     });
-    return { deposit, credit };
+    return { cash, bank, credit };
 };
 
 window.openAdjustBalanceModal = function(userName) {
@@ -2243,7 +2264,7 @@ window.openAdjustBalanceModal = function(userName) {
     currentSysBalances = window.getUserBalance(userName);
     
     document.getElementById('adjUserName').innerText = userName;
-    document.getElementById('adjAccountType').value = '存款'; 
+    document.getElementById('adjAccountType').value = '現金'; 
     
     window.updateAdjustDisplay();
     document.getElementById('adjustBalanceModal').style.display = 'flex';
@@ -2251,7 +2272,7 @@ window.openAdjustBalanceModal = function(userName) {
 
 window.updateAdjustDisplay = function() {
     let type = document.getElementById('adjAccountType').value;
-    let sysBal = type === '存款' ? currentSysBalances.deposit : currentSysBalances.credit;
+    let sysBal = type === '現金' ? currentSysBalances.cash : (type === '銀行' ? currentSysBalances.bank : currentSysBalances.credit);
     
     document.getElementById('adjSysBalance').innerText = sysBal.toLocaleString();
     document.getElementById('adjActualBalance').value = sysBal;
@@ -2261,7 +2282,7 @@ window.updateAdjustDisplay = function() {
 window.submitBalanceAdjustment = async function() {
     let actual = Number(document.getElementById('adjActualBalance').value) || 0;
     let type = document.getElementById('adjAccountType').value;
-    let sysBal = type === '存款' ? currentSysBalances.deposit : currentSysBalances.credit;
+    let sysBal = type === '現金' ? currentSysBalances.cash : (type === '銀行' ? currentSysBalances.bank : currentSysBalances.credit);
     
     let diff = actual - sysBal;
     

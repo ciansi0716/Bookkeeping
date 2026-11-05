@@ -214,7 +214,13 @@
         </div>
         <div class="form-group row">
           <div class="col"><label>金額</label><input type="number" name="amount" required></div>
-          <div class="col"><label>付款方式</label><select id="payMethod" name="payMethod"><option value="存款">存款</option><option value="信用卡">信用卡</option></select></div>
+          <div class="col"><label>付款方式</label>
+            <select id="payMethod" name="payMethod">
+              <option value="現金">現金</option>
+              <option value="銀行">銀行</option>
+              <option value="信用卡">信用卡</option>
+            </select>
+          </div>
         </div>
         <div class="form-group row">
           <div class="col"><label>付款人 <span class="quick-add" onclick="quickAdd('使用者')">➕新增</span></label><select id="user" name="user" required></select></div>
@@ -270,7 +276,8 @@
         <div class="col">
             <label>校正帳戶</label>
             <select id="adjAccountType" onchange="updateAdjustDisplay()" style="font-weight:bold; color:#1976d2;">
-                <option value="存款">存款餘額</option>
+                <option value="現金">現金餘額</option>
+                <option value="銀行">銀行餘額</option>
                 <option value="信用卡">信用卡可用餘額</option>
             </select>
         </div>
