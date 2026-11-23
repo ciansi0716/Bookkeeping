@@ -1,7 +1,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
 import { 
     getFirestore, collection, getDocs, doc, setDoc, deleteDoc, query, where 
-} from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
+} from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore-lite.js";
 
 // ==========================================
 // 你的 Firebase 專案設定
@@ -366,8 +366,13 @@ window.fetchData = async function() {
     if(list) list.innerHTML = `<div class="empty-state">資料與資料庫同步中...</div>`;
 
     try {
-        const manageSnap = await getDocs(collection(db, "manageData"));
+        const q = query(collection(db, "expenses"), where("ledgerName", "==", ledger));
+        const [manageSnap, expenseSnap] = await Promise.all([
+            getDocs(collection(db, "manageData")),
+            getDocs(q)
+        ]);
         let manageData = manageSnap.docs.map(d => d.data());
+        let rawExpenses = expenseSnap.docs.map(d => d.data());
 
         appData['帳本'] = manageData.filter(d => d.type === '帳本');
         appData['使用者'] = manageData.filter(d => d.type === '使用者');
@@ -377,14 +382,12 @@ window.fetchData = async function() {
         
         if (!appData['大分類'].find(c => c.name === '信用卡')) appData['大分類'].push({ id: 'cc_main', name: '信用卡', parentName: '', icon: '💳', color: '' });
         if (!appData['小分類'].find(c => c.name === '繳信用卡')) appData['小分類'].push({ id: 'cc_sub', name: '繳信用卡', parentName: '信用卡', icon: '💳', color: '' });
+        if (!appData['大分類'].find(c => c.name === '現金存入')) appData['大分類'].push({ id: 'cash_deposit_main', name: '現金存入', parentName: '', icon: '🏦', color: '' });
+        if (!appData['小分類'].find(c => c.name === '現金存入')) appData['小分類'].push({ id: 'cash_deposit_sub', name: '現金存入', parentName: '現金存入', icon: '🏦', color: '' });
         if (!appData['大分類'].find(c => c.name === '轉帳')) appData['大分類'].push({ id: 'transfer_main', name: '轉帳', parentName: '', icon: '🔄', color: '' });
         if (!appData['小分類'].find(c => c.name === '轉帳')) appData['小分類'].push({ id: 'transfer_sub', name: '轉帳', parentName: '轉帳', icon: '💸', color: '' });
         if (!appData['大分類'].find(c => c.name === '結帳')) appData['大分類'].push({ id: 'chk_main', name: '結帳', parentName: '', icon: '📝', color: '' });
         if (!appData['小分類'].find(c => c.name === '結帳')) appData['小分類'].push({ id: 'chk_sub', name: '結帳', parentName: '結帳', icon: '📝', color: '' });
-
-        const q = query(collection(db, "expenses"), where("ledgerName", "==", ledger));
-        const expenseSnap = await getDocs(q);
-        let rawExpenses = expenseSnap.docs.map(d => d.data());
 
         validExpenseData = [];
         exceptionExpenseData = [];
@@ -493,6 +496,10 @@ function getIcon(categoryName, type) {
 
 function isCheckoutRecord(e) {
     return String(e.mainCategory || '').includes('結帳') || String(e.subCategory || '').includes('結帳');
+}
+
+function isCashDepositRecord(e) {
+    return String(e.mainCategory || '') === '現金存入' || String(e.subCategory || '') === '現金存入';
 }
 
 function getExceptionReason(exp) {
@@ -713,7 +720,26 @@ function initUI() {
     if(globalSel) globalSel.addEventListener('change', window.fetchData);
 
     const mainCatSel = document.getElementById('mainCategory');
-    if(mainCatSel) mainCatSel.addEventListener('change', () => window.updateFormSubCategory());
+    if(mainCatSel) {
+        mainCatSel.addEventListener('change', () => {
+            window.updateFormSubCategory();
+            if (mainCatSel.value === '現金存入') {
+                document.getElementById('subCategory').value = '現金存入';
+                document.getElementById('payMethod').value = '現金';
+                document.querySelector('select[name="type"]').value = 'expense';
+            }
+        });
+    }
+
+    const subCatSel = document.getElementById('subCategory');
+    if(subCatSel) {
+        subCatSel.addEventListener('change', () => {
+            if (subCatSel.value === '現金存入') {
+                document.getElementById('payMethod').value = '現金';
+                document.querySelector('select[name="type"]').value = 'expense';
+            }
+        });
+    }
     
     const adjInput = document.getElementById('adjActualBalance');
     if(adjInput) {
@@ -1169,17 +1195,18 @@ window.renderDailyList = function() {
         const amt = Number(e.amount) || 0;
         
         let isPayingCreditCardBill = (e.mainCategory === '信用卡' && e.subCategory === '繳信用卡' && e.type === '支出');
+        let isCashDeposit = isCashDepositRecord(e);
         let isTransfer = (e.mainCategory === '轉帳'); 
         let isCheckout = isCheckoutRecord(e); 
         
-        if (!isPayingCreditCardBill && !isTransfer && !isCheckout) {
+        if (!isPayingCreditCardBill && !isCashDeposit && !isTransfer && !isCheckout) {
             if(e.type === '支出') dailyExpense += amt;
             else if(e.type === '收入') dailyIncome += amt; 
         }
         
         let color = e.type === '收入' ? '#4CAF50' : '#ef5350';
         let sign = e.type === '收入' ? '+' : '-';
-        if (isTransfer || isCheckout) {
+        if (isTransfer || isCheckout || isCashDeposit) {
             color = '#8e24aa'; 
             sign = '';
         }
@@ -1202,6 +1229,8 @@ window.renderDailyList = function() {
         let payBadge = '';
         if (isTransfer) {
             payBadge = `<span class="detail-project-tag" style="background:#f3e5f5; color:#7b1fa2; border-color:#e1bee7;">🔄 內部轉帳</span>`;
+        } else if (isCashDeposit) {
+            payBadge = `<span class="detail-project-tag" style="background:#e8f5e9; color:#2e7d32; border-color:#c8e6c9;">💵 ➔ 🏦 現金存入</span>`;
         } else if (isCheckout) {
             payBadge = `<span class="detail-project-tag" style="background:#e0f7fa; color:#006064; border-color:#b2ebf2;">📝 系統結帳</span>`;
         } else {
@@ -1216,7 +1245,7 @@ window.renderDailyList = function() {
 
         // 🌟 勾選框還款按鈕處理 (整合在第一行標籤列)
         let repayBadge = '';
-        if (isShared && !isTransfer && !isCheckout) {
+        if (isShared && !isTransfer && !isCheckout && !isCashDeposit) {
             let isRepaid = e.isRepaidBool;
             let statusText = isRepaid ? '已還' : '未還';
             let statusColor = isRepaid ? '#4CAF50' : '#ef5350';
@@ -1280,7 +1309,7 @@ window.renderDailyList = function() {
 
     const summaryHTML = `
         <div style="background:${netBg}; padding:10px; border-radius:6px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; font-weight:bold; color:${netColor};">
-            <span>本日淨收支 (不含轉帳/結帳/繳卡)</span>
+            <span>本日淨收支 (不含轉帳/結帳/繳卡/存入)</span>
             <span style="font-size:18px;">${netSign}$${Math.abs(netAmount).toLocaleString()}</span>
         </div>`;
     list.innerHTML = summaryHTML + listHTML;
@@ -1356,6 +1385,7 @@ window.renderChart = function() {
     if (!showTransfer) {
         filtered = filtered.filter(e => e.mainCategory !== '轉帳');
         filtered = filtered.filter(e => !(e.mainCategory === '信用卡' && e.subCategory === '繳信用卡' && e.type === '支出'));
+        filtered = filtered.filter(e => !isCashDepositRecord(e));
     }
 
     const isChartUnrepaid = document.getElementById('chartShowUnrepaid') ? document.getElementById('chartShowUnrepaid').checked : false;
@@ -1435,14 +1465,14 @@ window.renderChart = function() {
         if (!groupMap[mainKey]) groupMap[mainKey] = { total: 0, subs: {} };
 
         if (e.type === '支出') {
-            if (mainKey !== '轉帳' && !isCheckoutRecord(e)) totalExpense += effectiveAmt;
+            if (mainKey !== '轉帳' && !isCheckoutRecord(e) && !isCashDepositRecord(e)) totalExpense += effectiveAmt;
             if (currentChartInOut === '支出' || currentChartInOut === '總收支') {
                 let val = (currentChartInOut === '總收支') ? -effectiveAmt : effectiveAmt;
                 groupMap[mainKey].total += val;
                 groupMap[mainKey].subs[subKey] = (groupMap[mainKey].subs[subKey] || 0) + val;
             }
         } else {
-            if (mainKey !== '轉帳' && !isCheckoutRecord(e)) totalIncome += effectiveAmt;
+            if (mainKey !== '轉帳' && !isCheckoutRecord(e) && !isCashDepositRecord(e)) totalIncome += effectiveAmt;
             if (currentChartInOut === '收入' || currentChartInOut === '總收支') {
                 groupMap[mainKey].total += effectiveAmt;
                 groupMap[mainKey].subs[subKey] = (groupMap[mainKey].subs[subKey] || 0) + effectiveAmt;
@@ -1542,6 +1572,7 @@ window.openChartDetail = function(label) {
     if (!showTransfer) {
         filtered = filtered.filter(e => e.mainCategory !== '轉帳');
         filtered = filtered.filter(e => !(e.mainCategory === '信用卡' && e.subCategory === '繳信用卡' && e.type === '支出'));
+        filtered = filtered.filter(e => !isCashDepositRecord(e));
     }
 
     const isDetailUnrepaid = document.getElementById('chartShowUnrepaid') ? document.getElementById('chartShowUnrepaid').checked : false;
@@ -1637,7 +1668,7 @@ window.openChartDetail = function(label) {
 
             // 🌟 統計明細中的還款勾選框 (整合在第一行標籤列)
             let repayBadge = '';
-            if (isShared && e.mainCategory !== '轉帳' && !isCheckoutRecord(e)) {
+            if (isShared && e.mainCategory !== '轉帳' && !isCheckoutRecord(e) && !isCashDepositRecord(e)) {
                 let isRepaid = e.isRepaidBool;
                 let statusText = isRepaid ? '已還' : '未還';
                 let statusColor = isRepaid ? '#4CAF50' : '#ef5350';
@@ -1718,6 +1749,7 @@ window.renderComparePage = function() {
     if (!showTransfer) {
         expenses = expenses.filter(e => e.mainCategory !== '轉帳');
         expenses = expenses.filter(e => !(e.mainCategory === '信用卡' && e.subCategory === '繳信用卡'));
+        expenses = expenses.filter(e => !isCashDepositRecord(e));
     }
 
     const isCompareUnrepaid = document.getElementById('compareShowUnrepaid') ? document.getElementById('compareShowUnrepaid').checked : false;
@@ -2048,7 +2080,7 @@ window.editExpense = function(id) {
     document.getElementById('date').value = exp.date; 
     document.querySelector('select[name="type"]').value = exp.type === '收入' ? 'income' : 'expense';
     document.querySelector('input[name="amount"]').value = exp.amount;
-    document.getElementById('payMethod').value = exp.payMethod || '存款'; 
+    document.getElementById('payMethod').value = exp.payMethod || '現金'; 
     document.querySelector('input[name="content"]').value = exp.content || '';
     
     // 讀取是否已還款
@@ -2221,6 +2253,7 @@ window.getUserBalance = function(userName) {
         let method = e.payMethod || '現金';
         if(method === '存款') method = '銀行';
         let isTransfer = (e.mainCategory === '轉帳'); 
+        let isCashDeposit = isCashDepositRecord(e);
 
         if (isTransfer) {
             if (e.user === userName) {
@@ -2234,6 +2267,16 @@ window.getUserBalance = function(userName) {
                 if (method === '銀行') bank += split;
                 else if (method === '信用卡') credit += split;
                 else cash += split;
+            }
+        } else if (isCashDeposit) {
+            // 現金存入：付款人扣現金、被使用者加銀行
+            if (e.user === userName) {
+                cash -= amt;
+            }
+            let tUsers = (e.parsedTargets && e.parsedTargets.length > 0) ? e.parsedTargets : [e.user];
+            if (tUsers.includes(userName)) {
+                let split = amt / tUsers.length;
+                bank += split;
             }
         } else {
             if (e.user === userName) {
