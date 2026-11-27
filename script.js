@@ -1,6 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
 import { 
-    getFirestore, collection, getDocs, getDoc, doc, setDoc, deleteDoc, query, where 
+    getFirestore, collection, getDocs, getDoc, doc, setDoc, deleteDoc, query, where, writeBatch 
 } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore-lite.js";
 
 // ==========================================
@@ -87,8 +87,8 @@ function getSyncTimestamp() {
 
 async function updateSyncMeta(kind, ts) {
     const payload = { type: SYNC_META_TYPE, id: SYNC_META_DOC_ID };
-    if (kind === 'expense') payload.expenseUpdatedAt = ts;
-    if (kind === 'manage') payload.manageUpdatedAt = ts;
+    if (kind === 'expense' || kind === 'both') payload.expenseUpdatedAt = ts;
+    if (kind === 'manage' || kind === 'both') payload.manageUpdatedAt = ts;
     try {
         await setDoc(doc(db, "manageData", SYNC_META_DOC_ID), payload, { merge: true });
     } catch (e) {
@@ -100,6 +100,104 @@ function saveCurrentCache(ledger) {
     const keys = getCacheKeys(ledger);
     safeLocalSet(keys.manageData, rawManageList);
     safeLocalSet(keys.expData, rawExpensesList);
+}
+
+// ==========================================
+// 一次性自動遷移：刪除舊「結帳」大項目並將舊資料移轉至「*非支出*」
+// ==========================================
+function needsLegacyNonExpenseMigration(e) {
+    if (!e || e.isDeleted === true) return false;
+    if (e.mainCategory === '結帳') return true;
+    if (e.mainCategory === '轉帳' && e.subCategory === '轉帳') return true;
+    if (e.mainCategory === '信用卡' && e.subCategory === '繳信用卡') return true;
+    if (e.mainCategory === '現金存入' && e.subCategory === '現金存入') return true;
+    if (e.mainCategory === '現金轉出' && e.subCategory === '現金轉出') return true;
+    return false;
+}
+
+async function migrateLegacyNonExpenseData(ledger) {
+    const manageToDelete = rawManageList.filter(d =>
+        (d.type === '大分類' && d.name === '結帳') ||
+        (d.type === '小分類' && d.parentName === '結帳' && d.name === '結帳')
+    );
+    const manageToMove = rawManageList.filter(d =>
+        d.type === '小分類' && d.parentName === '結帳' && d.name !== '結帳'
+    );
+    const expensesToMove = rawExpensesList.filter(needsLegacyNonExpenseMigration);
+
+    if (manageToDelete.length === 0 && manageToMove.length === 0 && expensesToMove.length === 0) {
+        return false;
+    }
+
+    const nowTs = getSyncTimestamp();
+    const ops = [];
+
+    const deleteManageIds = new Set();
+    manageToDelete.forEach(m => {
+        deleteManageIds.add(String(m.id));
+        ops.push({ op: 'delete', col: 'manageData', id: String(m.id) });
+    });
+
+    const movedManageMap = new Map();
+    manageToMove.forEach(m => {
+        const updated = { ...m, parentName: NON_EXPENSE_MAIN };
+        movedManageMap.set(String(m.id), updated);
+        ops.push({ op: 'set', col: 'manageData', id: String(m.id), data: updated });
+    });
+
+    const movedExpMap = new Map();
+    expensesToMove.forEach(e => {
+        const newSub = (e.mainCategory === '結帳' && !e.subCategory) ? '結帳' : e.subCategory;
+        const updated = {
+            ...e,
+            mainCategory: NON_EXPENSE_MAIN,
+            subCategory: newSub,
+            updatedAt: nowTs
+        };
+        movedExpMap.set(String(e.id), updated);
+        ops.push({ op: 'set', col: 'expenses', id: String(e.id), data: updated });
+    });
+
+    try {
+        // 每批最多 400 筆寫入，避免超過 Firestore 單批 500 筆限制
+        const CHUNK_SIZE = 400;
+        for (let i = 0; i < ops.length; i += CHUNK_SIZE) {
+            const batch = writeBatch(db);
+            const chunk = ops.slice(i, i + CHUNK_SIZE);
+            chunk.forEach(item => {
+                const ref = doc(db, item.col, item.id);
+                if (item.op === 'delete') batch.delete(ref);
+                else batch.set(ref, item.data);
+            });
+            await batch.commit();
+        }
+
+        const manageChanged = manageToDelete.length > 0 || manageToMove.length > 0;
+        const expChanged = expensesToMove.length > 0;
+        const keys = getCacheKeys(ledger);
+
+        if (manageChanged) {
+            rawManageList = rawManageList
+                .filter(d => !deleteManageIds.has(String(d.id)))
+                .map(d => movedManageMap.get(String(d.id)) || d);
+            safeLocalSet(keys.manageSync, String(nowTs));
+        }
+
+        if (expChanged) {
+            rawExpensesList = rawExpensesList.map(e => movedExpMap.get(String(e.id)) || e);
+            safeLocalSet(keys.expSync, String(nowTs));
+        }
+
+        if (manageChanged && expChanged) await updateSyncMeta('both', nowTs);
+        else if (manageChanged) await updateSyncMeta('manage', nowTs);
+        else if (expChanged) await updateSyncMeta('expense', nowTs);
+
+        saveCurrentCache(ledger);
+        return true;
+    } catch (err) {
+        console.error('舊資料自動遷移失敗：', err);
+        return false;
+    }
 }
 
 // ==========================================
@@ -242,6 +340,10 @@ window.importDataFromCSV = async function(event) {
                 if (!item.ledgerName) item.ledgerName = currentLedger;
                 if (item.isRepaid === 'true') item.isRepaid = true;
                 if (item.isRepaid === 'false') item.isRepaid = false;
+                if (needsLegacyNonExpenseMigration(item)) {
+                    if (item.mainCategory === '結帳' && !item.subCategory) item.subCategory = '結帳';
+                    item.mainCategory = NON_EXPENSE_MAIN;
+                }
                 item.isDeleted = false;
                 item.updatedAt = nowTs;
 
@@ -475,8 +577,10 @@ document.addEventListener('DOMContentLoaded', function() {
 function processAndRenderAll() {
     appData['帳本'] = rawManageList.filter(d => d.type === '帳本');
     appData['使用者'] = rawManageList.filter(d => d.type === '使用者');
-    appData['大分類'] = rawManageList.filter(d => d.type === '大分類');
-    appData['小分類'] = rawManageList.filter(d => d.type === '小分類');
+    appData['大分類'] = rawManageList.filter(d => d.type === '大分類' && d.name !== '結帳');
+    appData['小分類'] = rawManageList
+        .filter(d => d.type === '小分類' && !(d.parentName === '結帳' && d.name === '結帳'))
+        .map(d => (d.parentName === '結帳' ? { ...d, parentName: NON_EXPENSE_MAIN } : d));
     appData['專案'] = rawManageList.filter(d => d.type === '專案'); 
 
     // 統一建立內建大項目「*非支出*」及其 5 個小項目
@@ -515,14 +619,9 @@ function processAndRenderAll() {
         e.payMethod = String(e.payMethod || '現金');
         if (e.payMethod === '存款') e.payMethod = '銀行';
 
-        // 相容舊資料：將原本獨立的非支出分類自動歸入 *非支出*，避免舊紀錄變成異常
-        if (
-            (e.mainCategory === '信用卡' && e.subCategory === '繳信用卡') ||
-            (e.mainCategory === '轉帳' && e.subCategory === '轉帳') ||
-            (e.mainCategory === '結帳' && e.subCategory === '結帳') ||
-            (e.mainCategory === '現金存入' && e.subCategory === '現金存入') ||
-            (e.mainCategory === '現金轉出' && e.subCategory === '現金轉出')
-        ) {
+        // 相容舊資料：將原本獨立的結帳與非支出分類自動歸入 *非支出*
+        if (needsLegacyNonExpenseMigration(e)) {
+            if (e.mainCategory === '結帳' && !e.subCategory) e.subCategory = '結帳';
             e.mainCategory = NON_EXPENSE_MAIN;
         }
 
@@ -653,6 +752,7 @@ window.fetchData = async function(options = {}) {
         const ledgers = rawManageList.filter(d => d.type === '帳本');
         if (ledgers.length > 0 && !ledgers.find(l => l.name === ledger)) {
             const targetLedger = ledgers[0].name;
+            ledger = targetLedger;
             if (globalSel) {
                 if (!Array.from(globalSel.options).some(o => o.value === targetLedger)) {
                     const opt = document.createElement('option');
@@ -677,6 +777,10 @@ window.fetchData = async function(options = {}) {
             }
             dataChanged = true;
         }
+
+        // 執行一次性自動遷移：刪除舊「結帳」大項目並將舊資料永久移轉至「*非支出*」
+        const migrated = await migrateLegacyNonExpenseData(ledger);
+        if (migrated) dataChanged = true;
 
         if (dataChanged || !hasLocalCache) {
             processAndRenderAll();
@@ -719,6 +823,11 @@ window.formatSlashDate = function(dateStr) {
     }
     return dateStr;
 };
+
+function formatSignedCurrency(val) {
+    const num = Number(val) || 0;
+    return `${num < 0 ? '-' : ''}$${Math.abs(num).toLocaleString()}`;
+}
 
 function getRandomColor() {
     const letters = '0123456789ABCDEF';
@@ -1343,6 +1452,7 @@ window.renderManageLists = function() {
         let userHtml = appData['使用者'].map(item => {
             const c = item.color || '#1976d2';
             const balances = window.getUserBalance(item.name); 
+            const userTotal = balances.cash + balances.bank + balances.credit;
             const isChecked = activeUsers.includes(item.name);
             
             if (isChecked) {
@@ -1358,10 +1468,11 @@ window.renderManageLists = function() {
                     <div class="item-icon" style="background-color:${c}20; color:${c}; border:1px solid ${c}50; font-size:14px; font-weight:bold; margin-right:10px;">色</div>
                     <div class="item-content">
                         <div style="font-size:16px;">${item.name}</div>
-                        <div style="font-size:13px; color:#888; margin-top:3px; display:flex; gap:10px;">
-                            <span>現金: <span style="color:${balances.cash>=0?'#4CAF50':'#ef5350'}; font-weight:bold;">$${balances.cash.toLocaleString()}</span></span>
-                            <span>銀行: <span style="color:${balances.bank>=0?'#4CAF50':'#ef5350'}; font-weight:bold;">$${balances.bank.toLocaleString()}</span></span>
-                            <span>信用卡: <span style="color:${balances.credit>=0?'#1976d2':'#ef5350'}; font-weight:bold;">$${balances.credit.toLocaleString()}</span></span>
+                        <div style="font-size:13px; color:#888; margin-top:3px; display:flex; flex-wrap:wrap; gap:6px 10px;">
+                            <span>現金: <span style="color:${balances.cash>=0?'#4CAF50':'#ef5350'}; font-weight:bold;">${formatSignedCurrency(balances.cash)}</span></span>
+                            <span>銀行: <span style="color:${balances.bank>=0?'#4CAF50':'#ef5350'}; font-weight:bold;">${formatSignedCurrency(balances.bank)}</span></span>
+                            <span>信用卡: <span style="color:${balances.credit>=0?'#1976d2':'#ef5350'}; font-weight:bold;">${formatSignedCurrency(balances.credit)}</span></span>
+                            <span>總金額: <span style="color:${userTotal>=0?'#2e7d32':'#ef5350'}; font-weight:bold;">${formatSignedCurrency(userTotal)}</span></span>
                         </div>
                     </div>
                     <div class="item-actions">
@@ -1373,21 +1484,29 @@ window.renderManageLists = function() {
             </li>`;
         }).join('');
         
+        const totalAllAmount = totalAllCash + totalAllBank + totalAllCredit;
+
         let totalHtml = `
-        <div style="background:#e3f2fd; border:1px solid #bbdefb; padding:12px; border-radius:8px; margin-bottom:15px; display:flex; justify-content:space-around; align-items:center;">
-            <div style="text-align:center;">
-                <div style="font-weight:bold; color:#1565c0; font-size:13px;">總現金</div>
-                <div style="font-size:18px; font-weight:bold; color:#1976d2;">$${totalAllCash.toLocaleString()}</div>
+        <div style="background:#e3f2fd; border:1px solid #bbdefb; padding:12px; border-radius:8px; margin-bottom:15px;">
+            <div style="text-align:center; padding-bottom:10px; margin-bottom:10px; border-bottom:1px solid #bbdefb;">
+                <div style="font-weight:bold; color:#1565c0; font-size:13px;">總金額</div>
+                <div style="font-size:20px; font-weight:bold; color:${totalAllAmount>=0?'#1565c0':'#ef5350'};">${formatSignedCurrency(totalAllAmount)}</div>
             </div>
-            <div style="width:1px; background:#bbdefb; height:30px;"></div>
-            <div style="text-align:center;">
-                <div style="font-weight:bold; color:#1565c0; font-size:13px;">總銀行</div>
-                <div style="font-size:18px; font-weight:bold; color:#1976d2;">$${totalAllBank.toLocaleString()}</div>
-            </div>
-            <div style="width:1px; background:#bbdefb; height:30px;"></div>
-            <div style="text-align:center;">
-                <div style="font-weight:bold; color:#1565c0; font-size:13px;">總信用卡</div>
-                <div style="font-size:18px; font-weight:bold; color:#1976d2;">$${totalAllCredit.toLocaleString()}</div>
+            <div style="display:flex; justify-content:space-around; align-items:center;">
+                <div style="text-align:center;">
+                    <div style="font-weight:bold; color:#1565c0; font-size:13px;">總現金</div>
+                    <div style="font-size:18px; font-weight:bold; color:#1976d2;">${formatSignedCurrency(totalAllCash)}</div>
+                </div>
+                <div style="width:1px; background:#bbdefb; height:30px;"></div>
+                <div style="text-align:center;">
+                    <div style="font-weight:bold; color:#1565c0; font-size:13px;">總銀行</div>
+                    <div style="font-size:18px; font-weight:bold; color:#1976d2;">${formatSignedCurrency(totalAllBank)}</div>
+                </div>
+                <div style="width:1px; background:#bbdefb; height:30px;"></div>
+                <div style="text-align:center;">
+                    <div style="font-weight:bold; color:#1565c0; font-size:13px;">總信用卡</div>
+                    <div style="font-size:18px; font-weight:bold; color:#1976d2;">${formatSignedCurrency(totalAllCredit)}</div>
+                </div>
             </div>
         </div>`;
         
