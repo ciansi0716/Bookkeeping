@@ -21,6 +21,7 @@ const db = getFirestore(app);
 
 const SYNC_META_DOC_ID = 'system_sync_meta';
 const SYNC_META_TYPE = 'system_meta';
+const NON_EXPENSE_MAIN = '*非支出*';
 
 // 全域變數
 let rawManageList = [];
@@ -477,15 +478,23 @@ function processAndRenderAll() {
     appData['大分類'] = rawManageList.filter(d => d.type === '大分類');
     appData['小分類'] = rawManageList.filter(d => d.type === '小分類');
     appData['專案'] = rawManageList.filter(d => d.type === '專案'); 
-    
-    if (!appData['大分類'].find(c => c.name === '信用卡')) appData['大分類'].push({ id: 'cc_main', name: '信用卡', parentName: '', icon: '💳', color: '' });
-    if (!appData['小分類'].find(c => c.name === '繳信用卡')) appData['小分類'].push({ id: 'cc_sub', name: '繳信用卡', parentName: '信用卡', icon: '💳', color: '' });
-    if (!appData['大分類'].find(c => c.name === '現金存入')) appData['大分類'].push({ id: 'cash_deposit_main', name: '現金存入', parentName: '', icon: '🏦', color: '' });
-    if (!appData['小分類'].find(c => c.name === '現金存入')) appData['小分類'].push({ id: 'cash_deposit_sub', name: '現金存入', parentName: '現金存入', icon: '🏦', color: '' });
-    if (!appData['大分類'].find(c => c.name === '轉帳')) appData['大分類'].push({ id: 'transfer_main', name: '轉帳', parentName: '', icon: '🔄', color: '' });
-    if (!appData['小分類'].find(c => c.name === '轉帳')) appData['小分類'].push({ id: 'transfer_sub', name: '轉帳', parentName: '轉帳', icon: '💸', color: '' });
-    if (!appData['大分類'].find(c => c.name === '結帳')) appData['大分類'].push({ id: 'chk_main', name: '結帳', parentName: '', icon: '📝', color: '' });
-    if (!appData['小分類'].find(c => c.name === '結帳')) appData['小分類'].push({ id: 'chk_sub', name: '結帳', parentName: '結帳', icon: '📝', color: '' });
+
+    // 統一建立內建大項目「*非支出*」及其 5 個小項目
+    if (!appData['大分類'].find(c => c.name === NON_EXPENSE_MAIN)) {
+        appData['大分類'].push({ id: 'non_expense_main', name: NON_EXPENSE_MAIN, parentName: '', icon: '🔁', color: '' });
+    }
+    const defaultNonExpenseSubs = [
+        { id: 'non_exp_transfer', name: '轉帳', icon: '💸' },
+        { id: 'non_exp_checkout', name: '結帳', icon: '📝' },
+        { id: 'non_exp_cc', name: '繳信用卡', icon: '💳' },
+        { id: 'non_exp_deposit', name: '現金存入', icon: '🏦' },
+        { id: 'non_exp_withdraw', name: '現金轉出', icon: '💵' }
+    ];
+    defaultNonExpenseSubs.forEach(sub => {
+        if (!appData['小分類'].find(c => c.parentName === NON_EXPENSE_MAIN && c.name === sub.name)) {
+            appData['小分類'].push({ id: sub.id, name: sub.name, parentName: NON_EXPENSE_MAIN, icon: sub.icon, color: '' });
+        }
+    });
 
     validExpenseData = [];
     exceptionExpenseData = [];
@@ -505,6 +514,17 @@ function processAndRenderAll() {
         // 轉換舊有的 '存款' 為 '銀行'
         e.payMethod = String(e.payMethod || '現金');
         if (e.payMethod === '存款') e.payMethod = '銀行';
+
+        // 相容舊資料：將原本獨立的非支出分類自動歸入 *非支出*，避免舊紀錄變成異常
+        if (
+            (e.mainCategory === '信用卡' && e.subCategory === '繳信用卡') ||
+            (e.mainCategory === '轉帳' && e.subCategory === '轉帳') ||
+            (e.mainCategory === '結帳' && e.subCategory === '結帳') ||
+            (e.mainCategory === '現金存入' && e.subCategory === '現金存入') ||
+            (e.mainCategory === '現金轉出' && e.subCategory === '現金轉出')
+        ) {
+            e.mainCategory = NON_EXPENSE_MAIN;
+        }
 
         let rawTarget = e.targetUser || e.user || '';
         e.parsedTargets = rawTarget.split(',').map(x=>x.trim()).filter(x=>x);
@@ -726,6 +746,7 @@ function getIcon(categoryName, type) {
     } else if (type === '小分類') {
         let sub = appData['小分類'].find(c => c.name === categoryName);
         if (sub) {
+            if (sub.icon) return sub.icon;
             let parentCat = appData['大分類'].find(c => c.name === sub.parentName);
             return parentCat && parentCat.icon ? parentCat.icon : '📁';
         }
@@ -738,8 +759,20 @@ function isCheckoutRecord(e) {
     return String(e.mainCategory || '').includes('結帳') || String(e.subCategory || '').includes('結帳');
 }
 
+function isTransferRecord(e) {
+    return String(e.mainCategory || '') === '轉帳' || String(e.subCategory || '') === '轉帳';
+}
+
+function isCreditCardPayRecord(e) {
+    return String(e.subCategory || '') === '繳信用卡' && e.type === '支出';
+}
+
 function isCashDepositRecord(e) {
     return String(e.mainCategory || '') === '現金存入' || String(e.subCategory || '') === '現金存入';
+}
+
+function isCashWithdrawRecord(e) {
+    return String(e.mainCategory || '') === '現金轉出' || String(e.subCategory || '') === '現金轉出';
 }
 
 function getExceptionReason(exp) {
@@ -963,11 +996,6 @@ function initUI() {
     if(mainCatSel) {
         mainCatSel.addEventListener('change', () => {
             window.updateFormSubCategory();
-            if (mainCatSel.value === '現金存入') {
-                document.getElementById('subCategory').value = '現金存入';
-                document.getElementById('payMethod').value = '現金';
-                document.querySelector('select[name="type"]').value = 'expense';
-            }
         });
     }
 
@@ -976,6 +1004,11 @@ function initUI() {
         subCatSel.addEventListener('change', () => {
             if (subCatSel.value === '現金存入') {
                 document.getElementById('payMethod').value = '現金';
+                document.querySelector('select[name="type"]').value = 'expense';
+            } else if (subCatSel.value === '現金轉出') {
+                document.getElementById('payMethod').value = '銀行';
+                document.querySelector('select[name="type"]').value = 'expense';
+            } else if (subCatSel.value === '繳信用卡') {
                 document.querySelector('select[name="type"]').value = 'expense';
             }
         });
@@ -1382,12 +1415,13 @@ window.renderManageLists = function() {
 
             const subs = appData['小分類'].filter(sub => sub.parentName === mainCat.name);
             subs.forEach(sub => {
+                const subIcon = sub.icon || icon;
                 const liSub = document.createElement('li');
                 liSub.className = 'cat-item';
                 liSub.style.borderBottom = "none";
                 liSub.innerHTML = `
                     <div class="item-header" style="padding-left: 40px; margin-bottom: 0;">
-                        <div class="item-icon" style="background:transparent;"><span class="cat-emoji" style="transform:scale(0.85);">${icon}</span></div>
+                        <div class="item-icon" style="background:transparent;"><span class="cat-emoji" style="transform:scale(0.85);">${subIcon}</span></div>
                         <div class="item-content">${sub.name}</div>
                         <div class="item-actions">
                             <button class="icon-btn-gray" onclick="openManageModal('edit', '小分類', '${sub.id}', '${sub.name}', '${mainCat.name}')">✎</button>
@@ -1443,24 +1477,27 @@ window.renderDailyList = function() {
     let listHTML = displayData.map(e => {
         const amt = Number(e.amount) || 0;
         
-        let isPayingCreditCardBill = (e.mainCategory === '信用卡' && e.subCategory === '繳信用卡' && e.type === '支出');
+        let isPayingCreditCardBill = isCreditCardPayRecord(e);
         let isCashDeposit = isCashDepositRecord(e);
-        let isTransfer = (e.mainCategory === '轉帳'); 
+        let isCashWithdraw = isCashWithdrawRecord(e);
+        let isTransfer = isTransferRecord(e); 
         let isCheckout = isCheckoutRecord(e); 
         
-        if (!isPayingCreditCardBill && !isCashDeposit && !isTransfer && !isCheckout) {
+        if (!isPayingCreditCardBill && !isCashDeposit && !isCashWithdraw && !isTransfer && !isCheckout) {
             if(e.type === '支出') dailyExpense += amt;
             else if(e.type === '收入') dailyIncome += amt; 
         }
         
         let color = e.type === '收入' ? '#4CAF50' : '#ef5350';
         let sign = e.type === '收入' ? '+' : '-';
-        if (isTransfer || isCheckout || isCashDeposit) {
+        if (isTransfer || isCheckout || isCashDeposit || isCashWithdraw) {
             color = '#8e24aa'; 
             sign = '';
         }
 
-        const emoji = getIcon(e.mainCategory, '大分類');
+        const emoji = e.mainCategory === NON_EXPENSE_MAIN
+            ? getIcon(e.subCategory, '小分類')
+            : getIcon(e.mainCategory, '大分類');
         const userStyle = getUserColorStyle(e.user); 
         
         let tUsers = e.parsedTargets || [];
@@ -1480,6 +1517,8 @@ window.renderDailyList = function() {
             payBadge = `<span class="detail-project-tag" style="background:#f3e5f5; color:#7b1fa2; border-color:#e1bee7;">🔄 內部轉帳</span>`;
         } else if (isCashDeposit) {
             payBadge = `<span class="detail-project-tag" style="background:#e8f5e9; color:#2e7d32; border-color:#c8e6c9;">💵 ➔ 🏦 現金存入</span>`;
+        } else if (isCashWithdraw) {
+            payBadge = `<span class="detail-project-tag" style="background:#fff3e0; color:#e65100; border-color:#ffe0b2;">🏦 ➔ 💵 現金轉出</span>`;
         } else if (isCheckout) {
             payBadge = `<span class="detail-project-tag" style="background:#e0f7fa; color:#006064; border-color:#b2ebf2;">📝 系統結帳</span>`;
         } else {
@@ -1494,7 +1533,7 @@ window.renderDailyList = function() {
 
         // 🌟 勾選框還款按鈕處理 (整合在第一行標籤列)
         let repayBadge = '';
-        if (isShared && !isTransfer && !isCheckout && !isCashDeposit) {
+        if (isShared && !isTransfer && !isCheckout && !isCashDeposit && !isCashWithdraw) {
             let isRepaid = e.isRepaidBool;
             let statusText = isRepaid ? '已還' : '未還';
             let statusColor = isRepaid ? '#4CAF50' : '#ef5350';
@@ -1558,7 +1597,7 @@ window.renderDailyList = function() {
 
     const summaryHTML = `
         <div style="background:${netBg}; padding:10px; border-radius:6px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; font-weight:bold; color:${netColor};">
-            <span>本日淨收支 (不含轉帳/結帳/繳卡/存入)</span>
+            <span>本日淨收支</span>
             <span style="font-size:18px;">${netSign}$${Math.abs(netAmount).toLocaleString()}</span>
         </div>`;
     list.innerHTML = summaryHTML + listHTML;
@@ -1632,9 +1671,10 @@ window.renderChart = function() {
 
     const showTransfer = document.getElementById('chartShowTransfer') ? document.getElementById('chartShowTransfer').checked : false;
     if (!showTransfer) {
-        filtered = filtered.filter(e => e.mainCategory !== '轉帳');
-        filtered = filtered.filter(e => !(e.mainCategory === '信用卡' && e.subCategory === '繳信用卡' && e.type === '支出'));
+        filtered = filtered.filter(e => !isTransferRecord(e));
+        filtered = filtered.filter(e => !isCreditCardPayRecord(e));
         filtered = filtered.filter(e => !isCashDepositRecord(e));
+        filtered = filtered.filter(e => !isCashWithdrawRecord(e));
     }
 
     const isChartUnrepaid = document.getElementById('chartShowUnrepaid') ? document.getElementById('chartShowUnrepaid').checked : false;
@@ -1713,15 +1753,17 @@ window.renderChart = function() {
         
         if (!groupMap[mainKey]) groupMap[mainKey] = { total: 0, subs: {} };
 
+        const isNonExpenseFlow = isTransferRecord(e) || isCheckoutRecord(e) || isCreditCardPayRecord(e) || isCashDepositRecord(e) || isCashWithdrawRecord(e);
+
         if (e.type === '支出') {
-            if (mainKey !== '轉帳' && !isCheckoutRecord(e) && !isCashDepositRecord(e)) totalExpense += effectiveAmt;
+            if (!isNonExpenseFlow) totalExpense += effectiveAmt;
             if (currentChartInOut === '支出' || currentChartInOut === '總收支') {
                 let val = (currentChartInOut === '總收支') ? -effectiveAmt : effectiveAmt;
                 groupMap[mainKey].total += val;
                 groupMap[mainKey].subs[subKey] = (groupMap[mainKey].subs[subKey] || 0) + val;
             }
         } else {
-            if (mainKey !== '轉帳' && !isCheckoutRecord(e) && !isCashDepositRecord(e)) totalIncome += effectiveAmt;
+            if (!isNonExpenseFlow) totalIncome += effectiveAmt;
             if (currentChartInOut === '收入' || currentChartInOut === '總收支') {
                 groupMap[mainKey].total += effectiveAmt;
                 groupMap[mainKey].subs[subKey] = (groupMap[mainKey].subs[subKey] || 0) + effectiveAmt;
@@ -1819,9 +1861,10 @@ window.openChartDetail = function(label) {
 
     const showTransfer = document.getElementById('chartShowTransfer') ? document.getElementById('chartShowTransfer').checked : false;
     if (!showTransfer) {
-        filtered = filtered.filter(e => e.mainCategory !== '轉帳');
-        filtered = filtered.filter(e => !(e.mainCategory === '信用卡' && e.subCategory === '繳信用卡' && e.type === '支出'));
+        filtered = filtered.filter(e => !isTransferRecord(e));
+        filtered = filtered.filter(e => !isCreditCardPayRecord(e));
         filtered = filtered.filter(e => !isCashDepositRecord(e));
+        filtered = filtered.filter(e => !isCashWithdrawRecord(e));
     }
 
     const isDetailUnrepaid = document.getElementById('chartShowUnrepaid') ? document.getElementById('chartShowUnrepaid').checked : false;
@@ -1917,7 +1960,7 @@ window.openChartDetail = function(label) {
 
             // 🌟 統計明細中的還款勾選框 (整合在第一行標籤列)
             let repayBadge = '';
-            if (isShared && e.mainCategory !== '轉帳' && !isCheckoutRecord(e) && !isCashDepositRecord(e)) {
+            if (isShared && !isTransferRecord(e) && !isCheckoutRecord(e) && !isCashDepositRecord(e) && !isCashWithdrawRecord(e)) {
                 let isRepaid = e.isRepaidBool;
                 let statusText = isRepaid ? '已還' : '未還';
                 let statusColor = isRepaid ? '#4CAF50' : '#ef5350';
@@ -1996,9 +2039,10 @@ window.renderComparePage = function() {
     
     const showTransfer = document.getElementById('compareShowTransfer') ? document.getElementById('compareShowTransfer').checked : false;
     if (!showTransfer) {
-        expenses = expenses.filter(e => e.mainCategory !== '轉帳');
-        expenses = expenses.filter(e => !(e.mainCategory === '信用卡' && e.subCategory === '繳信用卡'));
+        expenses = expenses.filter(e => !isTransferRecord(e));
+        expenses = expenses.filter(e => !isCreditCardPayRecord(e));
         expenses = expenses.filter(e => !isCashDepositRecord(e));
+        expenses = expenses.filter(e => !isCashWithdrawRecord(e));
     }
 
     const isCompareUnrepaid = document.getElementById('compareShowUnrepaid') ? document.getElementById('compareShowUnrepaid').checked : false;
@@ -2545,8 +2589,10 @@ window.getUserBalance = function(userName) {
         let amt = Number(e.amount) || 0;
         let method = e.payMethod || '現金';
         if(method === '存款') method = '銀行';
-        let isTransfer = (e.mainCategory === '轉帳'); 
+        let isTransfer = isTransferRecord(e); 
         let isCashDeposit = isCashDepositRecord(e);
+        let isCashWithdraw = isCashWithdrawRecord(e);
+        let isPayingCC = isCreditCardPayRecord(e);
 
         if (isTransfer) {
             if (e.user === userName) {
@@ -2571,19 +2617,29 @@ window.getUserBalance = function(userName) {
                 let split = amt / tUsers.length;
                 bank += split;
             }
+        } else if (isCashWithdraw) {
+            // 現金轉出（銀行領現金）：付款人扣銀行、被使用者加現金
+            if (e.user === userName) {
+                bank -= amt;
+            }
+            let tUsers = (e.parsedTargets && e.parsedTargets.length > 0) ? e.parsedTargets : [e.user];
+            if (tUsers.includes(userName)) {
+                let split = amt / tUsers.length;
+                cash += split;
+            }
         } else {
             if (e.user === userName) {
                 if (method === '現金') {
                     if (e.type === '收入') cash += amt;
                     else if (e.type === '支出') {
                         cash -= amt;
-                        if (e.mainCategory === '信用卡' && e.subCategory === '繳信用卡') credit += amt; 
+                        if (isPayingCC) credit += amt; 
                     }
                 } else if (method === '銀行') {
                     if (e.type === '收入') bank += amt;
                     else if (e.type === '支出') {
                         bank -= amt;
-                        if (e.mainCategory === '信用卡' && e.subCategory === '繳信用卡') credit += amt; 
+                        if (isPayingCC) credit += amt; 
                     }
                 } else if (method === '信用卡') {
                     if (e.type === '收入') credit += amt; 
