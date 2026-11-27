@@ -1,6 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
 import { 
-    getFirestore, collection, getDocs, doc, setDoc, deleteDoc, query, where 
+    getFirestore, collection, getDocs, getDoc, doc, setDoc, deleteDoc, query, where 
 } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore-lite.js";
 
 // ==========================================
@@ -20,6 +20,8 @@ const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
 // 全域變數
+let rawManageList = [];
+let rawExpensesList = [];
 let appData = { '帳本': [], '使用者': [], '大分類': [], '小分類': [], '專案': [] };
 let validExpenseData = []; 
 let exceptionExpenseData = []; 
@@ -37,6 +39,64 @@ const compareColors = ['#F44336', '#2196F3', '#4CAF50', '#FF9800', '#9C27B0'];
 let isGroupedView = false;
 let currentAdjustUser = '';
 let currentSysBalances = { cash: 0, bank: 0, credit: 0 };
+
+// 省額度自動同步控制變數
+let isSyncing = false;
+let lastAutoCheckTime = 0;
+let lastKnownMetaTime = 0;
+
+// ==========================================
+// 本機快取與增量同步工具（自動執行，免手動按鈕）
+// ==========================================
+function getCacheKeys(ledger) {
+    return {
+        manageData: 'bk_v2_manage_data',
+        manageSync: 'bk_v2_manage_sync',
+        expData: `bk_v2_exp_data_${ledger}`,
+        expSync: `bk_v2_exp_sync_${ledger}`,
+        lastLedger: 'bk_v2_last_ledger'
+    };
+}
+
+function safeLocalSet(key, val) {
+    try {
+        localStorage.setItem(key, typeof val === 'string' ? val : JSON.stringify(val));
+    } catch (e) {
+        console.warn('本機快取儲存空間不足，略過快取寫入：', e);
+    }
+}
+
+function safeLocalGetJson(key, fallback) {
+    try {
+        const raw = localStorage.getItem(key);
+        return raw ? JSON.parse(raw) : fallback;
+    } catch (e) {
+        return fallback;
+    }
+}
+
+function getSyncTimestamp() {
+    const now = Math.max(Date.now(), lastKnownMetaTime + 1);
+    lastKnownMetaTime = now;
+    return now;
+}
+
+async function updateSyncMeta(kind, ts) {
+    const payload = { type: '__meta__', id: '__sync_meta__' };
+    if (kind === 'expense') payload.expenseUpdatedAt = ts;
+    if (kind === 'manage') payload.manageUpdatedAt = ts;
+    try {
+        await setDoc(doc(db, "manageData", "__sync_meta__"), payload, { merge: true });
+    } catch (e) {
+        console.warn('同步標記更新失敗：', e);
+    }
+}
+
+function saveCurrentCache(ledger) {
+    const keys = getCacheKeys(ledger);
+    safeLocalSet(keys.manageData, rawManageList);
+    safeLocalSet(keys.expData, rawExpensesList);
+}
 
 // ==========================================
 // CSV 匯出 / 匯入邏輯
@@ -157,7 +217,11 @@ window.importDataFromCSV = async function(event) {
         btn.innerText = "匯入中...⏳"; btn.disabled = true;
 
         try {
+            const currentLedger = document.getElementById('globalLedgerSelect').value;
+            const nowTs = getSyncTimestamp();
             const promises = [];
+            const importedForCurrentLedger = [];
+
             for (let i = 1; i < rows.length; i++) {
                 const cols = rows[i];
                 if (cols.length === 1 && cols[0] === '') continue;
@@ -171,16 +235,29 @@ window.importDataFromCSV = async function(event) {
                 
                 item.amount = Number(item.amount) || 0;
                 if (!item.targetUser) item.targetUser = item.user;
-                if (!item.ledgerName) item.ledgerName = document.getElementById('globalLedgerSelect').value;
+                if (!item.ledgerName) item.ledgerName = currentLedger;
                 if (item.isRepaid === 'true') item.isRepaid = true;
                 if (item.isRepaid === 'false') item.isRepaid = false;
+                item.isDeleted = false;
+                item.updatedAt = nowTs;
 
                 promises.push(setDoc(doc(db, "expenses", String(item.id)), item));
+                if (item.ledgerName === currentLedger) {
+                    importedForCurrentLedger.push(item);
+                }
             }
 
             await Promise.all(promises);
+            await updateSyncMeta('expense', nowTs);
+
+            // 直接更新本機陣列與快取（免重抓整個資料庫）
+            const map = new Map(rawExpensesList.map(x => [String(x.id), x]));
+            importedForCurrentLedger.forEach(item => map.set(String(item.id), item));
+            rawExpensesList = Array.from(map.values());
+            saveCurrentCache(currentLedger);
+            processAndRenderAll();
+
             alert(`🎉 成功匯入 ${promises.length} 筆資料！`);
-            window.fetchData(); 
         } catch (err) {
             console.error(err);
             alert("匯入發生錯誤：" + err.message);
@@ -197,25 +274,38 @@ window.importDataFromCSV = async function(event) {
 // ==========================================
 window.toggleRepayStatus = function(id, currentStatus) {
     let newStatus = !currentStatus;
+    const nowTs = getSyncTimestamp();
+    const currentLedger = document.getElementById('globalLedgerSelect').value;
     
-    // 樂觀更新
+    // 樂觀更新本機陣列與快取
+    let rawExp = rawExpensesList.find(e => String(e.id) === String(id));
+    if (rawExp) {
+        rawExp.isRepaid = newStatus;
+        rawExp.updatedAt = nowTs;
+    }
     let exp = validExpenseData.find(e => e.id.toString() === String(id));
     if (exp) {
         exp.isRepaid = newStatus;
         exp.isRepaidBool = newStatus;
     }
+    saveCurrentCache(currentLedger);
 
     if (document.getElementById('page-home').classList.contains('active')) window.renderDailyList();
     if (document.getElementById('page-charts').classList.contains('active')) window.renderChart();
     if (document.getElementById('page-chart-detail').classList.contains('active')) window.openChartDetail(currentChartDetailLabel);
     if (document.getElementById('page-compare').classList.contains('active')) window.renderComparePage();
 
-    setDoc(doc(db, "expenses", String(id)), { isRepaid: newStatus }, { merge: true }).catch(err => {
+    Promise.all([
+        setDoc(doc(db, "expenses", String(id)), { isRepaid: newStatus, updatedAt: nowTs }, { merge: true }),
+        updateSyncMeta('expense', nowTs)
+    ]).catch(err => {
         console.error("狀態更新失敗：", err);
+        if (rawExp) rawExp.isRepaid = currentStatus;
         if (exp) {
             exp.isRepaid = currentStatus;
             exp.isRepaidBool = currentStatus;
         }
+        saveCurrentCache(currentLedger);
         window.renderDailyList();
     });
 };
@@ -350,94 +440,241 @@ window.onCompareUserCheckboxChange = function(checkbox) {
 };
 
 // ==========================================
-// 系統啟動與資料讀取
+// 系統啟動與自動省額度資料同步
 // ==========================================
 document.addEventListener('DOMContentLoaded', function() {
+    // 優先恢復上次使用的帳本，避免第一次抓錯帳本導致雙倍讀取
+    const savedLedger = localStorage.getItem('bk_v2_last_ledger');
+    const globalSel = document.getElementById('globalLedgerSelect');
+    if (savedLedger && globalSel) {
+        if (!Array.from(globalSel.options).some(o => o.value === savedLedger)) {
+            const opt = document.createElement('option');
+            opt.value = savedLedger;
+            opt.textContent = savedLedger;
+            globalSel.appendChild(opt);
+        }
+        globalSel.value = savedLedger;
+    }
+
     initUI();
     initDateSelects(); 
     window.fetchData(); 
+
+    // 切回網頁或解除手機鎖定時，自動靜默檢查有無新資料（最多花 1 次讀取）
+    document.addEventListener('visibilitychange', function() {
+        if (document.visibilityState === 'visible' && Date.now() - lastAutoCheckTime > 30000) {
+            window.fetchData({ silent: true });
+        }
+    });
 });
 
-window.fetchData = async function() {
-    const globalSel = document.getElementById('globalLedgerSelect');
-    const ledger = globalSel ? globalSel.value : '日常帳本';
+function processAndRenderAll() {
+    appData['帳本'] = rawManageList.filter(d => d.type === '帳本');
+    appData['使用者'] = rawManageList.filter(d => d.type === '使用者');
+    appData['大分類'] = rawManageList.filter(d => d.type === '大分類');
+    appData['小分類'] = rawManageList.filter(d => d.type === '小分類');
+    appData['專案'] = rawManageList.filter(d => d.type === '專案'); 
     
-    const list = document.getElementById('expenseList');
-    if(list) list.innerHTML = `<div class="empty-state">資料與資料庫同步中...</div>`;
+    if (!appData['大分類'].find(c => c.name === '信用卡')) appData['大分類'].push({ id: 'cc_main', name: '信用卡', parentName: '', icon: '💳', color: '' });
+    if (!appData['小分類'].find(c => c.name === '繳信用卡')) appData['小分類'].push({ id: 'cc_sub', name: '繳信用卡', parentName: '信用卡', icon: '💳', color: '' });
+    if (!appData['大分類'].find(c => c.name === '現金存入')) appData['大分類'].push({ id: 'cash_deposit_main', name: '現金存入', parentName: '', icon: '🏦', color: '' });
+    if (!appData['小分類'].find(c => c.name === '現金存入')) appData['小分類'].push({ id: 'cash_deposit_sub', name: '現金存入', parentName: '現金存入', icon: '🏦', color: '' });
+    if (!appData['大分類'].find(c => c.name === '轉帳')) appData['大分類'].push({ id: 'transfer_main', name: '轉帳', parentName: '', icon: '🔄', color: '' });
+    if (!appData['小分類'].find(c => c.name === '轉帳')) appData['小分類'].push({ id: 'transfer_sub', name: '轉帳', parentName: '轉帳', icon: '💸', color: '' });
+    if (!appData['大分類'].find(c => c.name === '結帳')) appData['大分類'].push({ id: 'chk_main', name: '結帳', parentName: '', icon: '📝', color: '' });
+    if (!appData['小分類'].find(c => c.name === '結帳')) appData['小分類'].push({ id: 'chk_sub', name: '結帳', parentName: '結帳', icon: '📝', color: '' });
+
+    validExpenseData = [];
+    exceptionExpenseData = [];
+    
+    rawExpensesList.forEach(rawItem => {
+        if (rawItem.isDeleted === true) return;
+        let e = { ...rawItem };
+        if (e.date) {
+            let dateStr = String(e.date);
+            if (dateStr.includes('T')) {
+                let d = new Date(dateStr); 
+                if (!isNaN(d.getTime())) e.date = formatDate(d);
+            } else {
+                e.date = dateStr.substring(0, 10);
+            }
+        }
+        // 轉換舊有的 '存款' 為 '銀行'
+        e.payMethod = String(e.payMethod || '現金');
+        if (e.payMethod === '存款') e.payMethod = '銀行';
+
+        let rawTarget = e.targetUser || e.user || '';
+        e.parsedTargets = rawTarget.split(',').map(x=>x.trim()).filter(x=>x);
+        e.isShared = e.parsedTargets.length > 1 || (e.parsedTargets.length === 1 && e.parsedTargets[0] !== e.user);
+        e.isRepaidBool = e.isRepaid === true || e.isRepaid === 'true';
+
+        let reason = getExceptionReason(e);
+        if (reason) { e.exceptionReason = reason; exceptionExpenseData.push(e); } 
+        else { validExpenseData.push(e); }
+    });
+    
+    window.renderManageLists();
+    updateChartDropdowns(); 
+    initCompareDropdowns(); 
+    
+    renderCalendar();
+    window.renderChart();
+    window.renderDailyList(); 
+    window.renderExceptionList();
+
+    if (document.getElementById('page-chart-detail').classList.contains('active')) window.openChartDetail(currentChartDetailLabel);
+    if (document.getElementById('page-compare').classList.contains('active')) window.renderComparePage();
+}
+
+window.fetchData = async function(options = {}) {
+    if (isSyncing) return;
+    isSyncing = true;
+    lastAutoCheckTime = Date.now();
+
+    const silent = options && options.silent === true;
+    const globalSel = document.getElementById('globalLedgerSelect');
+    let ledger = globalSel ? globalSel.value : '日常帳本';
+    const keys = getCacheKeys(ledger);
+    safeLocalSet(keys.lastLedger, ledger);
+
+    // 1. 先從本機快取秒開顯示（0 次讀取）
+    const localManageSync = Number(localStorage.getItem(keys.manageSync) || 0);
+    const localExpSync = Number(localStorage.getItem(keys.expSync) || 0);
+    const hasLocalCache = localManageSync > 0 && localExpSync > 0;
+
+    if (hasLocalCache) {
+        rawManageList = safeLocalGetJson(keys.manageData, []);
+        rawExpensesList = safeLocalGetJson(keys.expData, []);
+        if (!silent) {
+            processAndRenderAll();
+        }
+    } else if (!silent) {
+        const list = document.getElementById('expenseList');
+        if(list) list.innerHTML = `<div class="empty-state">資料與資料庫同步中...</div>`;
+    }
 
     try {
-        const q = query(collection(db, "expenses"), where("ledgerName", "==", ledger));
-        const [manageSnap, expenseSnap] = await Promise.all([
-            getDocs(collection(db, "manageData")),
-            getDocs(q)
-        ]);
-        let manageData = manageSnap.docs.map(d => d.data());
-        let rawExpenses = expenseSnap.docs.map(d => d.data());
+        // 2. 只花「1 次讀取」檢查雲端是否有更新
+        const metaSnap = await getDoc(doc(db, "manageData", "__sync_meta__"));
+        const meta = metaSnap.exists() ? metaSnap.data() : {};
+        const remoteManageTs = Number(meta.manageUpdatedAt || 0);
+        const remoteExpTs = Number(meta.expenseUpdatedAt || 0);
+        lastKnownMetaTime = Math.max(lastKnownMetaTime, remoteManageTs, remoteExpTs);
 
-        appData['帳本'] = manageData.filter(d => d.type === '帳本');
-        appData['使用者'] = manageData.filter(d => d.type === '使用者');
-        appData['大分類'] = manageData.filter(d => d.type === '大分類');
-        appData['小分類'] = manageData.filter(d => d.type === '小分類');
-        appData['專案'] = manageData.filter(d => d.type === '專案'); 
-        
-        if (!appData['大分類'].find(c => c.name === '信用卡')) appData['大分類'].push({ id: 'cc_main', name: '信用卡', parentName: '', icon: '💳', color: '' });
-        if (!appData['小分類'].find(c => c.name === '繳信用卡')) appData['小分類'].push({ id: 'cc_sub', name: '繳信用卡', parentName: '信用卡', icon: '💳', color: '' });
-        if (!appData['大分類'].find(c => c.name === '現金存入')) appData['大分類'].push({ id: 'cash_deposit_main', name: '現金存入', parentName: '', icon: '🏦', color: '' });
-        if (!appData['小分類'].find(c => c.name === '現金存入')) appData['小分類'].push({ id: 'cash_deposit_sub', name: '現金存入', parentName: '現金存入', icon: '🏦', color: '' });
-        if (!appData['大分類'].find(c => c.name === '轉帳')) appData['大分類'].push({ id: 'transfer_main', name: '轉帳', parentName: '', icon: '🔄', color: '' });
-        if (!appData['小分類'].find(c => c.name === '轉帳')) appData['小分類'].push({ id: 'transfer_sub', name: '轉帳', parentName: '轉帳', icon: '💸', color: '' });
-        if (!appData['大分類'].find(c => c.name === '結帳')) appData['大分類'].push({ id: 'chk_main', name: '結帳', parentName: '', icon: '📝', color: '' });
-        if (!appData['小分類'].find(c => c.name === '結帳')) appData['小分類'].push({ id: 'chk_sub', name: '結帳', parentName: '結帳', icon: '📝', color: '' });
+        let dataChanged = false;
 
-        validExpenseData = [];
-        exceptionExpenseData = [];
-        
-        rawExpenses.forEach(e => {
-            if (e.date) {
-                let dateStr = String(e.date);
-                if (dateStr.includes('T')) {
-                    let d = new Date(dateStr); 
-                    if (!isNaN(d.getTime())) e.date = formatDate(d);
-                } else {
-                    e.date = dateStr.substring(0, 10);
+        // 3. 判斷 manageData 是否需要更新
+        const needManageFetch = (localManageSync === 0) || (remoteManageTs > localManageSync);
+        // 4. 判斷 expenses 是否需要全抓或只需「增量抓」
+        const needFullExpFetch = (localExpSync === 0);
+        const needDeltaExpFetch = (!needFullExpFetch) && (remoteExpTs > localExpSync);
+
+        const tasks = [];
+        if (needManageFetch) {
+            tasks.push(
+                getDocs(collection(db, "manageData")).then(snap => {
+                    rawManageList = snap.docs
+                        .map(d => d.data())
+                        .filter(d => d.id !== '__sync_meta__' && d.type !== '__meta__');
+                    safeLocalSet(keys.manageData, rawManageList);
+                    safeLocalSet(keys.manageSync, String(remoteManageTs || 1));
+                    dataChanged = true;
+                })
+            );
+        }
+
+        if (needFullExpFetch) {
+            const q = query(collection(db, "expenses"), where("ledgerName", "==", ledger));
+            tasks.push(
+                getDocs(q).then(snap => {
+                    rawExpensesList = snap.docs
+                        .map(d => d.data())
+                        .filter(d => d.isDeleted !== true);
+                    safeLocalSet(keys.expData, rawExpensesList);
+                    safeLocalSet(keys.expSync, String(remoteExpTs || 1));
+                    dataChanged = true;
+                })
+            );
+        } else if (needDeltaExpFetch) {
+            // 增量同步：只抓取上次同步之後有異動的那幾筆（60秒緩衝防時差）
+            const sinceTs = localExpSync > 60000 ? (localExpSync - 60000) : 1;
+            const qDelta = query(collection(db, "expenses"), where("updatedAt", ">", sinceTs));
+            tasks.push(
+                getDocs(qDelta).then(snap => {
+                    const map = new Map(rawExpensesList.map(x => [String(x.id), x]));
+                    snap.docs.forEach(d => {
+                        const item = d.data();
+                        const itemId = String(item.id || d.id);
+                        if (item.isDeleted === true) {
+                            map.delete(itemId);
+                        } else if (item.ledgerName === ledger) {
+                            map.set(itemId, item);
+                        } else if (map.has(itemId)) {
+                            // 若該筆被改到其他帳本，從目前帳本移除
+                            map.delete(itemId);
+                        }
+                    });
+                    rawExpensesList = Array.from(map.values());
+                    safeLocalSet(keys.expData, rawExpensesList);
+                    safeLocalSet(keys.expSync, String(remoteExpTs));
+                    dataChanged = true;
+                })
+            );
+        }
+
+        if (tasks.length > 0) {
+            await Promise.all(tasks);
+        }
+
+        // 檢查目前帳本是否不存在於帳本清單中（若有真實帳本則自動切換一次，絕不無窮迴圈）
+        const ledgers = rawManageList.filter(d => d.type === '帳本');
+        if (ledgers.length > 0 && !ledgers.find(l => l.name === ledger)) {
+            const targetLedger = ledgers[0].name;
+            if (globalSel) {
+                if (!Array.from(globalSel.options).some(o => o.value === targetLedger)) {
+                    const opt = document.createElement('option');
+                    opt.value = targetLedger;
+                    opt.textContent = targetLedger;
+                    globalSel.appendChild(opt);
                 }
+                globalSel.value = targetLedger;
             }
-            // 轉換舊有的 '存款' 為 '銀行'
-            e.payMethod = String(e.payMethod || '現金');
-            if (e.payMethod === '存款') e.payMethod = '銀行';
+            const targetKeys = getCacheKeys(targetLedger);
+            safeLocalSet(targetKeys.lastLedger, targetLedger);
 
-            let rawTarget = e.targetUser || e.user || '';
-            e.parsedTargets = rawTarget.split(',').map(x=>x.trim()).filter(x=>x);
-            e.isShared = e.parsedTargets.length > 1 || (e.parsedTargets.length === 1 && e.parsedTargets[0] !== e.user);
-            e.isRepaidBool = e.isRepaid === true || e.isRepaid === 'true';
+            const targetExpSync = Number(localStorage.getItem(targetKeys.expSync) || 0);
+            if (targetExpSync > 0) {
+                rawExpensesList = safeLocalGetJson(targetKeys.expData, []);
+            } else {
+                const qTarget = query(collection(db, "expenses"), where("ledgerName", "==", targetLedger));
+                const targetSnap = await getDocs(qTarget);
+                rawExpensesList = targetSnap.docs.map(d => d.data()).filter(d => d.isDeleted !== true);
+                safeLocalSet(targetKeys.expData, rawExpensesList);
+                safeLocalSet(targetKeys.expSync, String(remoteExpTs || 1));
+            }
+            dataChanged = true;
+        }
 
-            let reason = getExceptionReason(e);
-            if (reason) { e.exceptionReason = reason; exceptionExpenseData.push(e); } 
-            else { validExpenseData.push(e); }
-        });
-        
-        window.renderManageLists();
-        updateChartDropdowns(); 
-        initCompareDropdowns(); 
-        
-        renderCalendar();
-        window.renderChart();
-        window.renderDailyList(); 
-        window.renderExceptionList();
-
-        if (document.getElementById('page-chart-detail').classList.contains('active')) window.openChartDetail(currentChartDetailLabel);
-        if (document.getElementById('page-compare').classList.contains('active')) window.renderComparePage();
+        if (dataChanged || !hasLocalCache) {
+            processAndRenderAll();
+        }
 
     } catch(err) {
         console.error("Fetch Data Error:", err);
-        if(list) {
-            list.innerHTML = `
-            <div class="empty-state" style="color:#e53935; padding: 20px;">
-                <div style="font-size:30px; margin-bottom:10px;">⚠️</div>
-                <div style="font-weight:bold; font-size:16px;">無法載入資料</div>
-                <div style="font-size:13px; color:#555; margin-top:8px;">${err.message}</div>
-            </div>`;
+        // 若已有本機快取，繼續保留畫面不清空，避免暫時斷網或超額時無法看帳
+        if (!hasLocalCache && !silent) {
+            const list = document.getElementById('expenseList');
+            if(list) {
+                list.innerHTML = `
+                <div class="empty-state" style="color:#e53935; padding: 20px;">
+                    <div style="font-size:30px; margin-bottom:10px;">⚠️</div>
+                    <div style="font-weight:bold; font-size:16px;">無法載入資料</div>
+                    <div style="font-size:13px; color:#555; margin-top:8px;">${err.message}</div>
+                </div>`;
+            }
         }
+    } finally {
+        isSyncing = false;
     }
 };
 
@@ -717,7 +954,7 @@ function initUI() {
     };
 
     const globalSel = document.getElementById('globalLedgerSelect');
-    if(globalSel) globalSel.addEventListener('change', window.fetchData);
+    if(globalSel) globalSel.addEventListener('change', () => window.fetchData());
 
     const mainCatSel = document.getElementById('mainCategory');
     if(mainCatSel) {
@@ -1035,11 +1272,20 @@ window.renderManageLists = function() {
     if (globalSel) {
         const currentVal = globalSel.value;
         globalSel.innerHTML = '';
-        if (appData['帳本'].length === 0) globalSel.innerHTML = `<option value="日常帳本">日常帳本</option>`;
-        else {
-            appData['帳本'].forEach(ledger => { globalSel.innerHTML += `<option value="${ledger.name}">${ledger.name}</option>`; });
-            if (currentVal && appData['帳本'].find(l => l.name === currentVal)) globalSel.value = currentVal;
-            else { globalSel.value = appData['帳本'][0].name; window.fetchData(); }
+        if (appData['帳本'].length === 0) {
+            globalSel.innerHTML = `<option value="日常帳本">日常帳本</option>`;
+        } else {
+            appData['帳本'].forEach(ledger => {
+                const opt = document.createElement('option');
+                opt.value = ledger.name;
+                opt.textContent = ledger.name;
+                globalSel.appendChild(opt);
+            });
+            if (currentVal && appData['帳本'].find(l => l.name === currentVal)) {
+                globalSel.value = currentVal;
+            } else {
+                globalSel.value = appData['帳本'][0].name;
+            }
         }
     }
 
@@ -2028,7 +2274,7 @@ function renderSvgChart(container, xLabels, datasets) {
 }
 
 // ==========================================
-// 表單操作與 Firestore 資料寫入
+// 表單操作與 Firestore 資料寫入（寫入後直接更新本機快取，不重抓整個帳本）
 // ==========================================
 window.quickAdd = async function(type) {
     let parentName = '';
@@ -2046,6 +2292,7 @@ window.quickAdd = async function(type) {
     else if (type === '使用者') color = getRandomColor(); 
     
     const id = Date.now().toString();
+    const nowTs = getSyncTimestamp();
     const payload = { type: type, id: id, name: newName, parentName: parentName, icon: icon, color: color };
 
     const btn = document.getElementById('submitBtn');
@@ -2053,9 +2300,14 @@ window.quickAdd = async function(type) {
     btn.innerText = '新增中...'; btn.disabled = true;
 
     try {
-        await setDoc(doc(db, "manageData", id), payload);
-        appData[type].push(payload);
-        window.updateFormDropdowns(); 
+        await Promise.all([
+            setDoc(doc(db, "manageData", id), payload),
+            updateSyncMeta('manage', nowTs)
+        ]);
+        rawManageList.push(payload);
+        saveCurrentCache(document.getElementById('globalLedgerSelect').value);
+        processAndRenderAll();
+
         if (type === '使用者') { 
             document.getElementById('user').value = payload.name; 
             document.getElementById('targetUser').value = payload.name;
@@ -2063,13 +2315,12 @@ window.quickAdd = async function(type) {
         if (type === '大分類') { document.getElementById('mainCategory').value = payload.name; window.updateFormSubCategory(); }
         if (type === '小分類') document.getElementById('subCategory').value = payload.name;
         if (type === '專案') document.getElementById('project').value = payload.name;
-        window.renderManageLists(); 
     } catch(err) {
-        alert("新增分類失敗");
+        alert("新增分類失敗：" + err.message);
     } finally {
         btn.innerText = oldText; btn.disabled = false;
     }
-}
+};
 
 window.editExpense = function(id) {
     let exp = validExpenseData.find(e => e.id.toString() === id.toString()) || exceptionExpenseData.find(e => e.id.toString() === id.toString());
@@ -2116,21 +2367,32 @@ window.editExpense = function(id) {
 
 window.deleteExpense = async function(id) {
     if(!confirm('確定要永久刪除這筆明細嗎？')) return;
-    
-    validExpenseData = validExpenseData.filter(e => e.id.toString() !== id.toString());
-    exceptionExpenseData = exceptionExpenseData.filter(e => e.id.toString() !== id.toString());
-    window.renderDailyList();
-    window.renderChart();
-    window.renderExceptionList();
-    
-    if (document.getElementById('page-chart-detail').classList.contains('active')) window.openChartDetail(currentChartDetailLabel);
-    if (document.getElementById('page-compare').classList.contains('active')) window.renderComparePage();
+
+    const currentLedger = document.getElementById('globalLedgerSelect').value;
+    const nowTs = getSyncTimestamp();
+
+    // 先樂觀更新本機快取與畫面
+    const backupList = [...rawExpensesList];
+    rawExpensesList = rawExpensesList.filter(e => String(e.id) !== String(id));
+    saveCurrentCache(currentLedger);
+    processAndRenderAll();
     
     try {
-        await deleteDoc(doc(db, "expenses", id.toString()));
-        window.fetchData(); 
+        // 使用軟刪除標記，讓其他裝置也能透過增量同步自動移除這筆（只需 1 次讀取）
+        await Promise.all([
+            setDoc(doc(db, "expenses", String(id)), {
+                id: String(id),
+                ledgerName: currentLedger,
+                isDeleted: true,
+                updatedAt: nowTs
+            }, { merge: true }),
+            updateSyncMeta('expense', nowTs)
+        ]);
     } catch(err) {
-        alert('刪除失敗');
+        alert('刪除失敗：' + err.message);
+        rawExpensesList = backupList;
+        saveCurrentCache(currentLedger);
+        processAndRenderAll();
     }
 };
 
@@ -2141,22 +2403,35 @@ document.getElementById('expenseForm').onsubmit = async function(e) {
 
     const formData = new FormData(this);
     const data = Object.fromEntries(formData.entries());
+    const currentLedger = document.getElementById('globalLedgerSelect').value;
+    const nowTs = getSyncTimestamp();
     
     if (!data.targetUser) data.targetUser = data.user;
-    data.ledgerName = document.getElementById('globalLedgerSelect').value;
-    // 儲存已還款狀態
+    data.ledgerName = currentLedger;
     data.isRepaid = document.getElementById('isRepaidCheckbox').checked;
 
     const docId = data.id.toString(); 
 
     data.type = data.type === 'income' ? '收入' : '支出';
     data.amount = Number(data.amount) || 0;
+    data.isDeleted = false;
+    data.updatedAt = nowTs;
 
     try {
-        await setDoc(doc(db, "expenses", docId), data);
+        await Promise.all([
+            setDoc(doc(db, "expenses", docId), data),
+            updateSyncMeta('expense', nowTs)
+        ]);
+
+        // 直接更新本機清單與快取，0 次讀取
+        const idx = rawExpensesList.findIndex(x => String(x.id) === docId);
+        if (idx >= 0) rawExpensesList[idx] = data;
+        else rawExpensesList.push(data);
+        saveCurrentCache(currentLedger);
+        processAndRenderAll();
+
         alert(data.operation === 'add' ? '新增成功！' : '修改成功！');
         document.getElementById('addModal').style.display = 'none';
-        window.fetchData(); 
     } catch(err) {
         alert('儲存失敗：' + err.message);
     } finally {
@@ -2205,11 +2480,17 @@ window.openManageModal = function(operation, type, id = null, currentName = '', 
 
 window.deleteItem = async function(type, id) {
     if(!confirm(`確定要刪除這個${type}嗎？\n(相關明細將會被移動到「異常」分頁！)`)) return;
+    const nowTs = getSyncTimestamp();
     try {
-        await deleteDoc(doc(db, "manageData", id.toString()));
-        window.fetchData();
+        await Promise.all([
+            deleteDoc(doc(db, "manageData", id.toString())),
+            updateSyncMeta('manage', nowTs)
+        ]);
+        rawManageList = rawManageList.filter(item => String(item.id) !== String(id));
+        saveCurrentCache(document.getElementById('globalLedgerSelect').value);
+        processAndRenderAll();
     } catch(err) {
-        alert('刪除失敗');
+        alert('刪除失敗：' + err.message);
     }
 };
 
@@ -2221,6 +2502,7 @@ document.getElementById('manageItemForm').onsubmit = async function(e) {
     const type = document.getElementById('manageType').value;
     const parentName = type === '小分類' ? document.getElementById('manageParentCatInput').value : "";
     const id = document.getElementById('manageId').value.toString();
+    const nowTs = getSyncTimestamp();
 
     const payload = {
         type: type, 
@@ -2232,9 +2514,17 @@ document.getElementById('manageItemForm').onsubmit = async function(e) {
     };
 
     try {
-        await setDoc(doc(db, "manageData", id), payload);
+        await Promise.all([
+            setDoc(doc(db, "manageData", id), payload),
+            updateSyncMeta('manage', nowTs)
+        ]);
+        const idx = rawManageList.findIndex(x => String(x.id) === id);
+        if (idx >= 0) rawManageList[idx] = payload;
+        else rawManageList.push(payload);
+
+        saveCurrentCache(document.getElementById('globalLedgerSelect').value);
+        processAndRenderAll();
         document.getElementById('manageItemModal').style.display = 'none';
-        window.fetchData(); 
     } catch(err) {
         alert('儲存失敗：' + err.message);
     } finally {
@@ -2339,6 +2629,7 @@ window.submitBalanceAdjustment = async function() {
 
     const ledger = document.getElementById('globalLedgerSelect') ? document.getElementById('globalLedgerSelect').value : '日常帳本';
     const id = Date.now().toString();
+    const nowTs = getSyncTimestamp();
 
     const data = {
         id: id,
@@ -2353,14 +2644,22 @@ window.submitBalanceAdjustment = async function() {
         project: '',
         content: `手動${type}校正差額`,
         ledgerName: ledger,
-        isRepaid: false
+        isRepaid: false,
+        isDeleted: false,
+        updatedAt: nowTs
     };
 
     try {
-        await setDoc(doc(db, "expenses", id), data);
+        await Promise.all([
+            setDoc(doc(db, "expenses", id), data),
+            updateSyncMeta('expense', nowTs)
+        ]);
+        rawExpensesList.push(data);
+        saveCurrentCache(ledger);
+        processAndRenderAll();
+
         alert(`已將${type}差額新增至「異常」明細！\n請前往異常分頁補齊分類。`);
         document.getElementById('adjustBalanceModal').style.display = 'none';
-        window.fetchData(); 
     } catch(err) {
         alert('校正失敗：' + err.message);
     } finally {
