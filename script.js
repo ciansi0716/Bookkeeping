@@ -19,6 +19,9 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
+const SYNC_META_DOC_ID = 'system_sync_meta';
+const SYNC_META_TYPE = 'system_meta';
+
 // 全域變數
 let rawManageList = [];
 let rawExpensesList = [];
@@ -82,11 +85,11 @@ function getSyncTimestamp() {
 }
 
 async function updateSyncMeta(kind, ts) {
-    const payload = { type: '__meta__', id: '__sync_meta__' };
+    const payload = { type: SYNC_META_TYPE, id: SYNC_META_DOC_ID };
     if (kind === 'expense') payload.expenseUpdatedAt = ts;
     if (kind === 'manage') payload.manageUpdatedAt = ts;
     try {
-        await setDoc(doc(db, "manageData", "__sync_meta__"), payload, { merge: true });
+        await setDoc(doc(db, "manageData", SYNC_META_DOC_ID), payload, { merge: true });
     } catch (e) {
         console.warn('同步標記更新失敗：', e);
     }
@@ -555,7 +558,7 @@ window.fetchData = async function(options = {}) {
 
     try {
         // 2. 只花「1 次讀取」檢查雲端是否有更新
-        const metaSnap = await getDoc(doc(db, "manageData", "__sync_meta__"));
+        const metaSnap = await getDoc(doc(db, "manageData", SYNC_META_DOC_ID));
         const meta = metaSnap.exists() ? metaSnap.data() : {};
         const remoteManageTs = Number(meta.manageUpdatedAt || 0);
         const remoteExpTs = Number(meta.expenseUpdatedAt || 0);
@@ -575,7 +578,7 @@ window.fetchData = async function(options = {}) {
                 getDocs(collection(db, "manageData")).then(snap => {
                     rawManageList = snap.docs
                         .map(d => d.data())
-                        .filter(d => d.id !== '__sync_meta__' && d.type !== '__meta__');
+                        .filter(d => d.id !== SYNC_META_DOC_ID && d.type !== SYNC_META_TYPE);
                     safeLocalSet(keys.manageData, rawManageList);
                     safeLocalSet(keys.manageSync, String(remoteManageTs || 1));
                     dataChanged = true;
